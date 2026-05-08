@@ -1,8 +1,6 @@
-setuptools>=65.0.0
-wheel>=0.38.0
-flask==3.0.3
-flask-cors==4.0.1
+flask
+flask-cors
 ultralytics==8.0.43
-opencv-python-headless==4.9.0.80
+opencv-python-headless
 numpy==1.24.3
-Pillow>=9.0.0
+Pillow
