@@ -1,6 +1,6 @@
 flask
 flask-cors
-ultralytics==8.0.43
+ultralytics
 opencv-python-headless
-numpy==1.24.3
+numpy
 Pillow
