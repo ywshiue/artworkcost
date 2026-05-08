@@ -1,0 +1,7 @@
+path: /Users/xueyiwen/ywshiue/Python_project/artworkcost/kiln-project/dataset
+train: images/train
+val: images/val
+
+nc: 1
+names:
+  0: object
