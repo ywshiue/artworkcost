@@ -679,9 +679,9 @@
     </div>
     <div class="loading-bar" id="topLoading"><div class="loading-fill"></div></div>
 
-    <div class="btn-group">
-      <button class="btn btn-secondary" onclick="startCamera('top')">啟動相機</button>
-      <button class="btn btn-primary" onclick="captureTop()">📸 拍照分析</button>
+    <div id="btnGroupTop">
+      <button class="btn btn-primary" id="btnStartTop" onclick="startAndCaptureTop()" style="margin-bottom:10px">📷 開始掃描俯視圖</button>
+      <button class="btn btn-secondary" id="btnCaptureTop" onclick="captureTop()" style="display:none; margin-bottom:10px">📸 拍照分析</button>
     </div>
 
     <div class="manual-section">
@@ -723,9 +723,9 @@
     </div>
     <div class="loading-bar" id="sideLoading"><div class="loading-fill"></div></div>
 
-    <div class="btn-group">
-      <button class="btn btn-secondary" onclick="startCamera('side')">啟動相機</button>
-      <button class="btn btn-primary" onclick="captureSide()">📸 拍照分析</button>
+    <div id="btnGroupSide">
+      <button class="btn btn-primary" id="btnStartSide" onclick="startAndCaptureSide()" style="margin-bottom:10px">📷 開始掃描側視圖</button>
+      <button class="btn btn-secondary" id="btnCaptureSide" onclick="captureSide()" style="display:none; margin-bottom:10px">📸 拍照分析</button>
     </div>
 
     <div class="manual-section">
@@ -847,9 +847,15 @@ async function startCamera(view) {
     overlayEl.style.display = 'none';
     gridEl.classList.add('visible');
     drawGridOverlay(view);
-    showToast('相機已啟動');
+    showToast('相機已啟動，請對準作品後拍照');
   } catch (e) {
     showToast('無法存取相機：' + e.message);
+    // Re-enable button on failure
+    const btn = document.getElementById(view === 'top' ? 'btnStartTop' : 'btnStartSide');
+    if (btn) { btn.textContent = view === 'top' ? '📷 開始掃描俯視圖' : '📷 開始掃描側視圖'; btn.disabled = false; btn.style.display = 'block'; }
+    const captureBtn = document.getElementById(view === 'top' ? 'btnCaptureTop' : 'btnCaptureSide');
+    if (captureBtn) captureBtn.style.display = 'none';
+    throw e;
   }
 }
 
@@ -1279,6 +1285,27 @@ function resetAll() {
 
 function printResult() {
   window.print();
+}
+
+// ========== One-tap camera open ==========
+async function startAndCaptureTop() {
+  const btn = document.getElementById('btnStartTop');
+  const captureBtn = document.getElementById('btnCaptureTop');
+  btn.textContent = '⏳ 開啟相機中...';
+  btn.disabled = true;
+  await startCamera('top');
+  btn.style.display = 'none';
+  captureBtn.style.display = 'block';
+}
+
+async function startAndCaptureSide() {
+  const btn = document.getElementById('btnStartSide');
+  const captureBtn = document.getElementById('btnCaptureSide');
+  btn.textContent = '⏳ 開啟相機中...';
+  btn.disabled = true;
+  await startCamera('side');
+  btn.style.display = 'none';
+  captureBtn.style.display = 'block';
 }
 
 // ========== Auto request camera permission on load ==========
