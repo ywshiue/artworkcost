@@ -876,6 +876,10 @@ function drawGridOverlay(view) {
   svgEl.innerHTML = lines;
 }
 
+// ========== OpenCV.js 載入 ==========
+let cvReady = false;
+function onOpenCvReady() { cvReady = true; }
+
 // ========== ONNX Runtime Web YOLO ==========
 // 你的 GitHub Pages 網址，模型從這裡載入
 const MODEL_URL = 'https://ywshiue.github.io/artworkcost/kiln-project/models/best.onnx';
