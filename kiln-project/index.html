@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>窯費計算器</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600&family=Space+Mono:wght@400;700&display=swap');
+
+  :root {
+    --clay: #c4703a;
+    --clay-light: #e8a97a;
+    --clay-dark: #8b4513;
+    --ash: #e8e0d5;
+    --smoke: #6b5f55;
+    --ember: #f0a500;
+    --kiln: #1a1410;
+    --glaze: #2d4a3e;
+    --white: #faf7f2;
+    --grid-line: rgba(196, 112, 58, 0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--kiln);
+    color: var(--ash);
+    font-family: 'Noto Serif TC', serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      radial-gradient(ellipse at 20% 50%, rgba(196,112,58,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 20%, rgba(139,69,19,0.06) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Grid overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 30px 30px;
+    opacity: 0.2;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app {
+    position: relative;
+    z-index: 1;
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 0 0 80px;
+  }
+
+  /* Header */
+  .header {
+    padding: 32px 24px 24px;
+    border-bottom: 1px solid rgba(196,112,58,0.3);
+    position: relative;
+  }
+  .header-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--clay);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: 2px;
+    color: var(--ash);
+    line-height: 1.2;
+  }
+  .header h1 span {
+    color: var(--clay-light);
+    font-weight: 600;
+  }
+  .header-sub {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--smoke);
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* Steps nav */
+  .steps-nav {
+    display: flex;
+    padding: 16px 24px;
+    gap: 0;
+    border-bottom: 1px solid rgba(196,112,58,0.15);
+  }
+  .step-dot {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    cursor: pointer;
+  }
+  .step-dot::after {
+    content: '';
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    right: -50%;
+    height: 2px;
+    background: rgba(196,112,58,0.2);
+  }
+  .step-dot:last-child::after { display: none; }
+  .step-dot.active::after { background: rgba(196,112,58,0.5); }
+  .step-dot.done .dot { background: var(--clay); border-color: var(--clay); }
+  .step-dot.done .dot::after { content: '✓'; color: var(--white); font-size: 10px; }
+  .dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid rgba(196,112,58,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--smoke);
+    background: var(--kiln);
+    position: relative;
+    z-index: 1;
+    transition: all 0.3s;
+  }
+  .step-dot.active .dot {
+    border-color: var(--clay-light);
+    color: var(--clay-light);
+    box-shadow: 0 0 12px rgba(196,112,58,0.4);
+  }
+  .step-label {
+    font-size: 10px;
+    color: var(--smoke);
+    text-align: center;
+    white-space: nowrap;
+  }
+  .step-dot.active .step-label { color: var(--clay-light); }
+
+  /* Screens */
+  .screen { display: none; padding: 24px; }
+  .screen.active { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* Card */
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(196,112,58,0.2);
+    border-radius: 2px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--clay);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title::before {
+    content: '';
+    display: block;
+    width: 16px;
+    height: 1px;
+    background: var(--clay);
+  }
+
+  /* Instruction */
+  .instruction {
+    font-size: 14px;
+    color: var(--ash);
+    line-height: 1.7;
+    margin-bottom: 16px;
+  }
+  .instruction strong { color: var(--clay-light); }
+
+  /* Camera area */
+  .camera-wrapper {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    background: #0a0806;
+    border: 1px solid rgba(196,112,58,0.3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  #videoTop, #videoSide { width: 100%; height: 100%; object-fit: cover; display: block; }
+  
+  /* Corner markers */
+  .camera-wrapper::before, .camera-wrapper::after {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-color: var(--clay-light);
+    border-style: solid;
+    z-index: 10;
+  }
+  .camera-wrapper::before { top: 8px; left: 8px; border-width: 2px 0 0 2px; }
+  .camera-wrapper::after { bottom: 8px; right: 8px; border-width: 0 2px 2px 0; }
+
+  .camera-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10,8,6,0.85);
+    z-index: 5;
+  }
+  .camera-overlay-icon { font-size: 40px; margin-bottom: 12px; }
+  .camera-overlay p { font-size: 13px; color: var(--smoke); text-align: center; line-height: 1.6; }
+  .camera-overlay p strong { color: var(--ash); }
+
+  /* Grid lines overlay on video */
+  .grid-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 6;
+    display: none;
+  }
+  .grid-overlay.visible { display: block; }
+  .grid-overlay svg { width: 100%; height: 100%; }
+
+  /* Canvas (hidden, used for capture) */
+  #canvasTop, #canvasSide { display: none; }
+
+  /* Captured image */
+  .captured-img {
+    width: 100%;
+    aspect-ratio: 4/3;
+    object-fit: cover;
+    border: 1px solid rgba(196,112,58,0.4);
+    border-radius: 2px;
+    display: none;
+    margin-bottom: 8px;
+  }
+  .captured-img.show { display: block; }
+
+  /* Detection result overlay */
+  .detection-area {
+    position: relative;
+    margin-bottom: 16px;
+  }
+  .detection-canvas-wrapper {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    border: 1px solid rgba(196,112,58,0.4);
+    border-radius: 2px;
+    overflow: hidden;
+    display: none;
+  }
+  .detection-canvas-wrapper.show { display: block; }
+  #detectCanvasTop, #detectCanvasSide {
+    width: 100%; height: 100%;
+    display: block;
+  }
+
+  /* Buttons */
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px 20px;
+    border: none;
+    border-radius: 2px;
+    font-family: 'Noto Serif TC', serif;
+    font-size: 15px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+  .btn-primary {
+    background: var(--clay);
+    color: var(--white);
+  }
+  .btn-primary:hover { background: var(--clay-light); }
+  .btn-primary:active { transform: scale(0.98); }
+  .btn-secondary {
+    background: transparent;
+    color: var(--clay-light);
+    border: 1px solid rgba(196,112,58,0.4);
+  }
+  .btn-secondary:hover { border-color: var(--clay-light); }
+  .btn-sm {
+    display: inline-block;
+    width: auto;
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+  .btn-danger {
+    background: transparent;
+    color: #c44a3a;
+    border: 1px solid rgba(196,58,58,0.3);
+  }
+  .btn-danger:hover { border-color: #c44a3a; }
+
+  .btn-group { display: flex; gap: 10px; margin-bottom: 12px; }
+  .btn-group .btn { flex: 1; }
+
+  /* Input */
+  .input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .input-label {
+    font-size: 13px;
+    color: var(--smoke);
+    white-space: nowrap;
+    min-width: 60px;
+  }
+  input[type="number"] {
+    flex: 1;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(196,112,58,0.3);
+    border-radius: 2px;
+    padding: 10px 12px;
+    color: var(--ash);
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    outline: none;
+    transition: border 0.2s;
+  }
+  input[type="number"]:focus { border-color: var(--clay-light); }
+  .input-unit {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--smoke);
+    white-space: nowrap;
+  }
+
+  /* Item list */
+  .items-list { margin-bottom: 16px; }
+  .item-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(196,112,58,0.15);
+    border-radius: 2px;
+    margin-bottom: 8px;
+    animation: fadeIn 0.2s ease;
+  }
+  .item-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--clay);
+    min-width: 28px;
+    background: rgba(196,112,58,0.1);
+    padding: 3px 6px;
+    border-radius: 2px;
+    text-align: center;
+  }
+  .item-info { flex: 1; }
+  .item-name {
+    font-size: 13px;
+    color: var(--ash);
+    margin-bottom: 3px;
+  }
+  .item-dims {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--smoke);
+  }
+  .item-vol {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    color: var(--clay-light);
+    text-align: right;
+  }
+  .item-del {
+    background: none;
+    border: none;
+    color: rgba(196,58,58,0.5);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px;
+    transition: color 0.2s;
+  }
+  .item-del:hover { color: #c44a3a; }
+
+  /* Summary */
+  .summary-card {
+    background: rgba(196,112,58,0.08);
+    border: 1px solid rgba(196,112,58,0.4);
+    border-radius: 2px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: var(--smoke);
+  }
+  .summary-row span:last-child {
+    font-family: 'Space Mono', monospace;
+    color: var(--ash);
+  }
+  .summary-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-top: 14px;
+    border-top: 1px solid rgba(196,112,58,0.3);
+    margin-top: 4px;
+  }
+  .summary-total-label {
+    font-size: 16px;
+    color: var(--ash);
+    letter-spacing: 1px;
+  }
+  .summary-total-price {
+    font-family: 'Space Mono', monospace;
+    font-size: 28px;
+    color: var(--clay-light);
+    font-weight: 700;
+  }
+  .summary-total-price::before { content: 'NT$'; font-size: 14px; margin-right: 4px; color: var(--smoke); }
+
+  /* Manual input mode */
+  .manual-section {
+    background: rgba(255,255,255,0.03);
+    border: 1px dashed rgba(196,112,58,0.25);
+    border-radius: 2px;
+    padding: 16px;
+    margin-top: 12px;
+  }
+  .manual-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--smoke);
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+
+  /* Detection status */
+  .detection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(196,112,58,0.08);
+    border-radius: 2px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--smoke);
+  }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--smoke);
+    flex-shrink: 0;
+  }
+  .status-dot.processing {
+    background: var(--ember);
+    animation: pulse 1s infinite;
+  }
+  .status-dot.done { background: #4caf7d; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid rgba(196,112,58,0.2);
+    margin-bottom: 16px;
+  }
+  .tab {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--smoke);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .tab.active {
+    color: var(--clay-light);
+    border-bottom-color: var(--clay-light);
+  }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--smoke);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
+
+  /* Help text */
+  .help-text {
+    font-size: 11px;
+    color: var(--smoke);
+    line-height: 1.6;
+    margin-top: 8px;
+    padding-left: 12px;
+    border-left: 2px solid rgba(196,112,58,0.2);
+  }
+
+  /* Item name input */
+  input[type="text"] {
+    width: 100%;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(196,112,58,0.3);
+    border-radius: 2px;
+    padding: 10px 12px;
+    color: var(--ash);
+    font-family: 'Noto Serif TC', serif;
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 12px;
+  }
+  input[type="text"]:focus { border-color: var(--clay-light); }
+  input[type="text"]::placeholder { color: var(--smoke); }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(60px);
+    background: var(--clay-dark);
+    color: var(--ash);
+    padding: 10px 20px;
+    border-radius: 2px;
+    font-size: 13px;
+    z-index: 999;
+    transition: transform 0.3s;
+    white-space: nowrap;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* Bottom bar */
+  .bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(26,20,16,0.95);
+    border-top: 1px solid rgba(196,112,58,0.2);
+    padding: 12px 24px;
+    z-index: 100;
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .bottom-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--smoke);
+  }
+  .bottom-count strong { color: var(--clay-light); }
+  .bottom-total {
+    font-family: 'Space Mono', monospace;
+    font-size: 16px;
+    color: var(--ash);
+  }
+  .bottom-total small { font-size: 11px; color: var(--smoke); margin-right: 4px; }
+
+  /* Retake notice */
+  .retake-note {
+    font-size: 11px;
+    color: var(--smoke);
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  /* Loading */
+  .loading-bar {
+    width: 100%;
+    height: 2px;
+    background: rgba(196,112,58,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    display: none;
+  }
+  .loading-bar.show { display: block; }
+  .loading-fill {
+    height: 100%;
+    background: var(--clay);
+    animation: load 1.5s ease-in-out infinite;
+  }
+  @keyframes load { 0% { width: 0%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 0%; margin-left: 100%; } }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="header">
+    <div class="header-tag">陶藝工作室</div>
+    <h1>燒窯<span>費用</span>計算</h1>
+    <div class="header-sub">KILN FEE CALCULATOR v1.0</div>
+  </div>
+
+  <!-- Steps nav -->
+  <div class="steps-nav">
+    <div class="step-dot active" id="stepDot1" onclick="goToStep(1)">
+      <div class="dot">01</div>
+      <div class="step-label">俯視掃描</div>
+    </div>
+    <div class="step-dot" id="stepDot2" onclick="goToStep(2)">
+      <div class="dot">02</div>
+      <div class="step-label">側視掃描</div>
+    </div>
+    <div class="step-dot" id="stepDot3" onclick="goToStep(3)">
+      <div class="dot">03</div>
+      <div class="step-label">確認清單</div>
+    </div>
+    <div class="step-dot" id="stepDot4" onclick="goToStep(4)">
+      <div class="dot">04</div>
+      <div class="step-label">計算結果</div>
+    </div>
+  </div>
+
+  <!-- Screen 1: Top view -->
+  <div class="screen active" id="screen1">
+    <div class="card">
+      <div class="card-title">俯視圖掃描</div>
+      <p class="instruction">將隔板置於穩定位置，從<strong>正上方</strong>拍攝所有作品。確保格線清晰可見，格線間距為 <strong>0.5 公分</strong>。</p>
+    </div>
+
+    <div class="camera-wrapper" id="cameraWrapTop">
+      <video id="videoTop" autoplay playsinline></video>
+      <div class="grid-overlay" id="gridTop">
+        <svg viewBox="0 0 400 300" preserveAspectRatio="none">
+          <!-- Grid lines will be drawn by JS -->
+        </svg>
+      </div>
+      <div class="camera-overlay" id="overlayTop" onclick="startAndCaptureTop()" style="cursor:pointer">
+        <div class="camera-overlay-icon">📷</div>
+        <p><strong>點此處開啟相機</strong><br>請給予相機使用權限</p>
+        <div style="margin-top:14px; background:var(--clay); color:var(--white); padding:10px 28px; border-radius:2px; font-size:15px; font-family:'Noto Serif TC',serif; letter-spacing:1px;">開始掃描</div>
+      </div>
+    </div>
+    <canvas id="canvasTop" width="800" height="600"></canvas>
+    <div class="detection-canvas-wrapper" id="detectWrapTop">
+      <canvas id="detectCanvasTop"></canvas>
+    </div>
+
+    <div id="topStatus" class="detection-status" style="display:none">
+      <div class="status-dot" id="topStatusDot"></div>
+      <span id="topStatusText">準備中...</span>
+    </div>
+    <div class="loading-bar" id="topLoading"><div class="loading-fill"></div></div>
+
+    <div id="btnGroupTop">
+      <button class="btn btn-primary" id="btnStartTop" onclick="startAndCaptureTop()" style="margin-bottom:10px">📷 開始掃描俯視圖</button>
+      <button class="btn btn-secondary" id="btnCaptureTop" onclick="captureTop()" style="display:none; margin-bottom:10px">📸 拍照分析</button>
+    </div>
+
+    <div class="manual-section">
+      <div class="manual-title">✏️ 手動輸入 / 調整底面積</div>
+      <p class="help-text">若自動偵測結果不準確，可在下方直接輸入各作品底面積（以格數計算）</p>
+      <div id="manualTopInputs">
+        <!-- Dynamically generated -->
+      </div>
+      <button class="btn btn-secondary" style="margin-top:8px" onclick="addManualTopItem()">＋ 新增作品</button>
+    </div>
+  </div>
+
+  <!-- Screen 2: Side view -->
+  <div class="screen" id="screen2">
+    <div class="card">
+      <div class="card-title">側視圖掃描</div>
+      <p class="instruction">從作品<strong>側面</strong>拍攝，確保能看到格線與作品完整高度。每件作品分別拍攝或整排掃描皆可。</p>
+    </div>
+
+    <div class="camera-wrapper" id="cameraWrapSide">
+      <video id="videoSide" autoplay playsinline></video>
+      <div class="grid-overlay" id="gridSide">
+        <svg viewBox="0 0 400 300" preserveAspectRatio="none">
+        </svg>
+      </div>
+      <div class="camera-overlay" id="overlaySide" onclick="startAndCaptureSide()" style="cursor:pointer">
+        <div class="camera-overlay-icon">📷</div>
+        <p><strong>點此處開啟相機</strong><br>請給予相機使用權限</p>
+        <div style="margin-top:14px; background:var(--clay); color:var(--white); padding:10px 28px; border-radius:2px; font-size:15px; font-family:'Noto Serif TC',serif; letter-spacing:1px;">開始掃描</div>
+      </div>
+    </div>
+    <canvas id="canvasSide" width="800" height="600"></canvas>
+    <div class="detection-canvas-wrapper" id="detectWrapSide">
+      <canvas id="detectCanvasSide"></canvas>
+    </div>
+
+    <div id="sideStatus" class="detection-status" style="display:none">
+      <div class="status-dot" id="sideStatusDot"></div>
+      <span id="sideStatusText">準備中...</span>
+    </div>
+    <div class="loading-bar" id="sideLoading"><div class="loading-fill"></div></div>
+
+    <div id="btnGroupSide">
+      <button class="btn btn-primary" id="btnStartSide" onclick="startAndCaptureSide()" style="margin-bottom:10px">📷 開始掃描側視圖</button>
+      <button class="btn btn-secondary" id="btnCaptureSide" onclick="captureSide()" style="display:none; margin-bottom:10px">📸 拍照分析</button>
+    </div>
+
+    <div class="manual-section">
+      <div class="manual-title">✏️ 手動輸入高度</div>
+      <p class="help-text">輸入每件作品的高度（以格數計算，每格 = 0.5 公分）</p>
+      <div id="manualSideInputs">
+        <!-- Dynamically generated from topItems -->
+      </div>
+    </div>
+
+    <div class="btn-group" style="margin-top:16px">
+      <button class="btn btn-secondary" onclick="goToStep(1)">← 返回</button>
+      <button class="btn btn-primary" onclick="goToStep(3)">確認並繼續 →</button>
+    </div>
+  </div>
+
+  <!-- Screen 3: Item list -->
+  <div class="screen" id="screen3">
+    <div class="card">
+      <div class="card-title">作品清單確認</div>
+      <p class="instruction">請確認每件作品的尺寸資料，可手動調整。</p>
+    </div>
+
+    <div class="items-list" id="itemsList">
+      <div class="empty-state">
+        <div class="empty-icon">🏺</div>
+        <p>尚未新增任何作品<br>請先完成俯視圖與側視圖掃描</p>
+      </div>
+    </div>
+
+    <button class="btn btn-secondary" onclick="addNewItem()" style="margin-bottom:16px">＋ 手動新增作品</button>
+
+    <div class="btn-group">
+      <button class="btn btn-secondary" onclick="goToStep(2)">← 返回</button>
+      <button class="btn btn-primary" onclick="calcAndShow()">計算費用 →</button>
+    </div>
+  </div>
+
+  <!-- Screen 4: Result -->
+  <div class="screen" id="screen4">
+    <div class="card">
+      <div class="card-title">計算結果</div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-row">
+        <span>作品件數</span>
+        <span id="resultCount">0 件</span>
+      </div>
+      <div class="summary-row">
+        <span>總體積</span>
+        <span id="resultVolume">0 cm³</span>
+      </div>
+      <div class="summary-row">
+        <span>計費方式</span>
+        <span>體積 × NT$0.15</span>
+      </div>
+      <div class="summary-total">
+        <div class="summary-total-label">總金額</div>
+        <div class="summary-total-price" id="resultPrice">0</div>
+      </div>
+    </div>
+
+    <!-- Per-item breakdown -->
+    <div class="card">
+      <div class="card-title">明細</div>
+      <div id="breakdown"></div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-secondary" onclick="goToStep(3)">← 調整</button>
+      <button class="btn btn-primary" onclick="resetAll()">🔄 新的一批</button>
+    </div>
+
+    <div style="text-align:center; margin-top:16px">
+      <button class="btn btn-sm btn-secondary" onclick="printResult()">🖨 列印 / 截圖</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom bar -->
+<div class="bottom-bar">
+  <div class="bottom-count">
+    <strong id="barCount">0</strong> 件作品
+  </div>
+  <div class="bottom-total">
+    <small>預估</small>
+    NT$<span id="barTotal">0</span>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== State ==========
+let items = []; // { id, name, topGrids, heightGrids, areaSquareCm, heightCm, volume }
+let topDetected = false;
+let sideDetected = false;
+let currentCam = null;
+let manualTopCount = 0;
+const GRID_SIZE_CM = 0.5;
+const PRICE_PER_CM3 = 0.15;
+
+// ========== Camera ==========
+async function startCamera(view) {
+  try {
+    if (currentCam) {
+      currentCam.getTracks().forEach(t => t.stop());
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 960 } }
+    });
+    currentCam = stream;
+    const videoEl = view === 'top' ? document.getElementById('videoTop') : document.getElementById('videoSide');
+    const overlayEl = view === 'top' ? document.getElementById('overlayTop') : document.getElementById('overlaySide');
+    const gridEl = view === 'top' ? document.getElementById('gridTop') : document.getElementById('gridSide');
+    videoEl.srcObject = stream;
+    overlayEl.style.display = 'none';
+    gridEl.classList.add('visible');
+    drawGridOverlay(view);
+    showToast('相機已啟動，請對準作品後拍照');
+  } catch (e) {
+    showToast('無法存取相機：' + e.message);
+    // Re-enable button on failure
+    const btn = document.getElementById(view === 'top' ? 'btnStartTop' : 'btnStartSide');
+    if (btn) { btn.textContent = view === 'top' ? '📷 開始掃描俯視圖' : '📷 開始掃描側視圖'; btn.disabled = false; btn.style.display = 'block'; }
+    const captureBtn = document.getElementById(view === 'top' ? 'btnCaptureTop' : 'btnCaptureSide');
+    if (captureBtn) captureBtn.style.display = 'none';
+    throw e;
+  }
+}
+
+function drawGridOverlay(view) {
+  const svgEl = document.querySelector(`#grid${view === 'top' ? 'Top' : 'Side'} svg`);
+  let lines = '';
+  for (let x = 0; x <= 400; x += 20) {
+    lines += `<line x1="${x}" y1="0" x2="${x}" y2="300" stroke="rgba(196,112,58,0.4)" stroke-width="0.5"/>`;
+  }
+  for (let y = 0; y <= 300; y += 20) {
+    lines += `<line x1="0" y1="${y}" x2="400" y2="${y}" stroke="rgba(196,112,58,0.4)" stroke-width="0.5"/>`;
+  }
+  lines += `<rect x="5" y="5" width="390" height="290" fill="none" stroke="rgba(196,112,58,0.8)" stroke-width="1.5"/>`;
+  svgEl.innerHTML = lines;
+}
+
+// ========== API 設定 ==========
+// 本機開發時用 http://localhost:5000
+// 部署到伺服器後改成你的伺服器網址，例如 https://your-server.railway.app
+const API_BASE = 'https://artworkcost.onrender.com';
+
+// ========== Capture & Real API Detection ==========
+async function captureTop() {
+  const video = document.getElementById('videoTop');
+  const canvas = document.getElementById('canvasTop');
+
+  if (!video.srcObject) {
+    showToast('請先開啟相機');
+    return;
+  }
+
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.videoWidth || 800;
+  canvas.height = video.videoHeight || 600;
+  ctx.drawImage(video, 0, 0);
+
+  showStatus('top', 'processing', '正在上傳並分析俯視圖...');
+  document.getElementById('topLoading').classList.add('show');
+  document.getElementById('btnCaptureTop').disabled = true;
+
+  try {
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
+    const response = await fetch(`${API_BASE}/detect/top`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || '偵測失敗');
+    }
+
+    drawTopDetections(canvas, result.objects);
+    applyTopDetections(result.objects);
+    showStatus('top', 'done', `偵測到 ${result.count} 件作品`);
+    showToast(`✓ 偵測到 ${result.count} 件作品的底面積`);
+
+  } catch (e) {
+    showStatus('top', '', `錯誤：${e.message}`);
+    showToast('❌ ' + e.message);
+  } finally {
+    document.getElementById('topLoading').classList.remove('show');
+    document.getElementById('btnCaptureTop').disabled = false;
+  }
+}
+
+async function captureSide() {
+  const video = document.getElementById('videoSide');
+  const canvas = document.getElementById('canvasSide');
+
+  if (!video.srcObject) {
+    showToast('請先開啟相機');
+    return;
+  }
+
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.videoWidth || 800;
+  canvas.height = video.videoHeight || 600;
+  ctx.drawImage(video, 0, 0);
+
+  showStatus('side', 'processing', '正在上傳並分析側視圖...');
+  document.getElementById('sideLoading').classList.add('show');
+  document.getElementById('btnCaptureSide').disabled = true;
+
+  try {
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
+    const response = await fetch(`${API_BASE}/detect/side`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || '偵測失敗');
+    }
+
+    drawSideDetections(canvas, result.objects);
+    applySideDetections(result.objects);
+    showStatus('side', 'done', `偵測到 ${result.count} 件作品高度`);
+    showToast(`✓ 偵測到作品高度資料`);
+
+  } catch (e) {
+    showStatus('side', '', `錯誤：${e.message}`);
+    showToast('❌ ' + e.message);
+  } finally {
+    document.getElementById('sideLoading').classList.remove('show');
+    document.getElementById('btnCaptureSide').disabled = false;
+  }
+}
+
+// ========== Draw detection results on canvas ==========
+function drawTopDetections(sourceCanvas, objects) {
+  const wrapEl = document.getElementById('detectWrapTop');
+  const drawCanvas = document.getElementById('detectCanvasTop');
+  wrapEl.classList.add('show');
+  drawCanvas.width = 400;
+  drawCanvas.height = 300;
+  const ctx = drawCanvas.getContext('2d');
+  ctx.drawImage(sourceCanvas, 0, 0, 400, 300);
+
+  const scaleX = 400 / sourceCanvas.width;
+  const scaleY = 300 / sourceCanvas.height;
+
+  objects.forEach((obj, i) => {
+    const [x1, y1, x2, y2] = obj.bbox;
+    const sx = x1 * scaleX, sy = y1 * scaleY;
+    const sw = (x2 - x1) * scaleX, sh = (y2 - y1) * scaleY;
+
+    ctx.strokeStyle = '#e8a97a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.fillStyle = 'rgba(196,112,58,0.15)';
+    ctx.fillRect(sx, sy, sw, sh);
+
+    ctx.fillStyle = 'rgba(26,20,16,0.8)';
+    ctx.fillRect(sx, sy, 90, 18);
+    ctx.fillStyle = '#e8a97a';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(`#${i+1} 底${obj.area_grids}格`, sx + 4, sy + 13);
+  });
+}
+
+function drawSideDetections(sourceCanvas, objects) {
+  const wrapEl = document.getElementById('detectWrapSide');
+  const drawCanvas = document.getElementById('detectCanvasSide');
+  wrapEl.classList.add('show');
+  drawCanvas.width = 400;
+  drawCanvas.height = 300;
+  const ctx = drawCanvas.getContext('2d');
+  ctx.drawImage(sourceCanvas, 0, 0, 400, 300);
+
+  const scaleX = 400 / sourceCanvas.width;
+  const scaleY = 300 / sourceCanvas.height;
+
+  objects.forEach((obj, i) => {
+    const [x1, y1, x2, y2] = obj.bbox;
+    const sx = x1 * scaleX, sy = y1 * scaleY;
+    const sw = (x2 - x1) * scaleX, sh = (y2 - y1) * scaleY;
+
+    ctx.strokeStyle = '#4caf7d';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.fillStyle = 'rgba(76,175,125,0.1)';
+    ctx.fillRect(sx, sy, sw, sh);
+
+    ctx.fillStyle = 'rgba(26,20,16,0.8)';
+    ctx.fillRect(sx, sy, 90, 18);
+    ctx.fillStyle = '#4caf7d';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(`#${i+1} 高${obj.height_grids}格`, sx + 4, sy + 13);
+  });
+}
+
+// ========== Apply detection results to items ==========
+function applyTopDetections(objects) {
+  items = [];
+  objects.forEach((obj, i) => {
+    items.push({
+      id: Date.now() + i,
+      name: `作品 ${i + 1}`,
+      topGrids: obj.area_grids,
+      heightGrids: 0,
+      areaSquareCm: obj.area_cm2,
+      heightCm: 0,
+      volume: 0
+    });
+  });
+  topDetected = true;
+  updateManualSideInputs();
+  renderManualTopItems();
+  updateBar();
+}
+
+function applySideDetections(objects) {
+  objects.forEach((obj, i) => {
+    if (items[i]) {
+      items[i].heightGrids = obj.height_grids;
+      items[i].heightCm = obj.height_cm;
+    }
+  });
+  sideDetected = true;
+  recalcVolumes();
+  updateManualSideInputs();
+  updateBar();
+}
+
+// ========== Manual inputs ==========
+function renderManualTopItems() {
+  const container = document.getElementById('manualTopInputs');
+  container.innerHTML = '';
+  items.forEach((item, i) => {
+    container.innerHTML += `
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <span style="font-family:'Space Mono',monospace; font-size:11px; color:var(--clay); min-width:24px">#${i+1}</span>
+        <input type="number" placeholder="底面積 (格數)" value="${item.topGrids || ''}" 
+          min="1" style="flex:1"
+          onchange="updateItemTop(${i}, this.value)">
+        <span class="input-unit">格</span>
+      </div>`;
+  });
+}
+
+function addManualTopItem() {
+  items.push({
+    id: Date.now(),
+    name: `作品 ${items.length + 1}`,
+    topGrids: 0,
+    heightGrids: 0,
+    areaSquareCm: 0,
+    heightCm: 0,
+    volume: 0
+  });
+  renderManualTopItems();
+  updateManualSideInputs();
+  updateBar();
+}
+
+function updateItemTop(idx, val) {
+  if (items[idx]) {
+    items[idx].topGrids = parseInt(val) || 0;
+    items[idx].areaSquareCm = items[idx].topGrids * GRID_SIZE_CM * GRID_SIZE_CM;
+    recalcVolumes();
+    updateBar();
+  }
+}
+
+function updateManualSideInputs() {
+  const container = document.getElementById('manualSideInputs');
+  container.innerHTML = '';
+  items.forEach((item, i) => {
+    container.innerHTML += `
+      <div style="margin-bottom:10px;">
+        <div style="font-size:12px; color:var(--smoke); margin-bottom:5px;">
+          #${i+1} ${item.name} 
+          <span style="color:var(--clay); font-family:'Space Mono',monospace; font-size:10px">(底${item.topGrids || '?'}格)</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input type="number" placeholder="高度 (格數)" value="${item.heightGrids || ''}" 
+            min="1" style="flex:1"
+            onchange="updateItemHeight(${i}, this.value)">
+          <span class="input-unit">格 = ${((item.heightGrids||0)*0.5).toFixed(1)}cm</span>
+        </div>
+      </div>`;
+  });
+}
+
+function updateItemHeight(idx, val) {
+  if (items[idx]) {
+    items[idx].heightGrids = parseInt(val) || 0;
+    items[idx].heightCm = items[idx].heightGrids * GRID_SIZE_CM;
+    recalcVolumes();
+    updateBar();
+  }
+}
+
+function recalcVolumes() {
+  items.forEach(item => {
+    item.areaSquareCm = item.topGrids * GRID_SIZE_CM * GRID_SIZE_CM;
+    item.heightCm = item.heightGrids * GRID_SIZE_CM;
+    item.volume = item.areaSquareCm * item.heightCm;
+  });
+}
+
+// ========== Step 3: List ==========
+function renderItemsList() {
+  const el = document.getElementById('itemsList');
+  if (items.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🏺</div><p>尚未新增任何作品<br>請先完成掃描或手動新增</p></div>`;
+    return;
+  }
+  el.innerHTML = items.map((item, i) => `
+    <div class="item-row" id="itemRow${item.id}">
+      <div class="item-num">#${i+1}</div>
+      <div class="item-info">
+        <input type="text" value="${item.name}" placeholder="作品名稱" 
+          style="background:none; border:none; border-bottom:1px solid rgba(196,112,58,0.2); border-radius:0; padding:2px 0; margin:0 0 4px; font-size:14px; width:100%"
+          onchange="items[${i}].name=this.value">
+        <div class="item-dims">
+          底: 
+          <input type="number" value="${item.topGrids}" min="0" 
+            style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
+            onchange="items[${i}].topGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
+          格 × 高:
+          <input type="number" value="${item.heightGrids}" min="0"
+            style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
+            onchange="items[${i}].heightGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
+          格 = ${item.volume.toFixed(2)} cm³
+        </div>
+      </div>
+      <div class="item-vol">NT$${(item.volume * PRICE_PER_CM3).toFixed(0)}</div>
+      <button class="item-del" onclick="deleteItem(${i})">✕</button>
+    </div>
+  `).join('');
+}
+
+function deleteItem(idx) {
+  items.splice(idx, 1);
+  renderItemsList();
+  updateBar();
+}
+
+function addNewItem() {
+  items.push({
+    id: Date.now(),
+    name: `作品 ${items.length + 1}`,
+    topGrids: 0,
+    heightGrids: 0,
+    areaSquareCm: 0,
+    heightCm: 0,
+    volume: 0
+  });
+  renderItemsList();
+  updateManualSideInputs();
+  updateBar();
+}
+
+// ========== Step 4: Calc ==========
+function calcAndShow() {
+  recalcVolumes();
+  const totalVol = items.reduce((s, i) => s + i.volume, 0);
+  const total = totalVol * PRICE_PER_CM3;
+
+  document.getElementById('resultCount').textContent = `${items.length} 件`;
+  document.getElementById('resultVolume').textContent = `${totalVol.toFixed(2)} cm³`;
+  document.getElementById('resultPrice').textContent = Math.ceil(total).toLocaleString();
+
+  const breakdown = document.getElementById('breakdown');
+  if (items.length === 0) {
+    breakdown.innerHTML = '<p class="help-text">無作品資料</p>';
+  } else {
+    breakdown.innerHTML = items.map((item, i) => `
+      <div style="display:flex; justify-content:space-between; align-items:center; 
+        padding:10px 0; border-bottom:1px solid rgba(196,112,58,0.1); font-size:13px;">
+        <div>
+          <span style="color:var(--clay); font-family:'Space Mono',monospace; font-size:10px; margin-right:6px">#${i+1}</span>
+          <span style="color:var(--ash)">${item.name}</span>
+          <div style="font-family:'Space Mono',monospace; font-size:10px; color:var(--smoke); margin-top:2px">
+            底${item.topGrids}格 × 高${item.heightGrids}格 = ${item.volume.toFixed(2)}cm³
+          </div>
+        </div>
+        <span style="font-family:'Space Mono',monospace; color:var(--clay-light)">NT$${Math.ceil(item.volume * PRICE_PER_CM3)}</span>
+      </div>
+    `).join('');
+  }
+
+  goToStep(4);
+}
+
+// ========== Navigation ==========
+function goToStep(n) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.step-dot').forEach((d, i) => {
+    d.classList.remove('active', 'done');
+    if (i + 1 < n) d.classList.add('done');
+    if (i + 1 === n) d.classList.add('active');
+  });
+  document.getElementById(`screen${n}`).classList.add('active');
+  window.scrollTo(0, 0);
+  if (n === 3) renderItemsList();
+  if (n === 2) updateManualSideInputs();
+}
+
+// ========== Status ==========
+function showStatus(view, state, text) {
+  const statusEl = document.getElementById(`${view}Status`);
+  const dotEl = document.getElementById(`${view}StatusDot`);
+  const textEl = document.getElementById(`${view}StatusText`);
+  statusEl.style.display = 'flex';
+  dotEl.className = 'status-dot ' + state;
+  textEl.textContent = text;
+}
+
+// ========== Bottom bar ==========
+function updateBar() {
+  recalcVolumes();
+  const total = items.reduce((s, i) => s + i.volume * PRICE_PER_CM3, 0);
+  document.getElementById('barCount').textContent = items.length;
+  document.getElementById('barTotal').textContent = Math.ceil(total).toLocaleString();
+}
+
+// ========== Toast ==========
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ========== Reset ==========
+function resetAll() {
+  items = [];
+  topDetected = false;
+  sideDetected = false;
+  if (currentCam) { currentCam.getTracks().forEach(t => t.stop()); currentCam = null; }
+  
+  // Reset overlays
+  ['Top', 'Side'].forEach(v => {
+    document.getElementById(`overlay${v}`).style.display = 'flex';
+    document.getElementById(`grid${v}`).classList.remove('visible');
+    document.getElementById(`detectWrap${v}`).classList.remove('show');
+    const vid = document.getElementById(`video${v}`);
+    vid.srcObject = null;
+    const status = document.getElementById(`${v.toLowerCase()}Status`);
+    if (status) status.style.display = 'none';
+  });
+
+  document.getElementById('manualTopInputs').innerHTML = '';
+  updateBar();
+  goToStep(1);
+  showToast('已清空，開始新的一批');
+}
+
+function printResult() {
+  window.print();
+}
+
+// ========== One-tap camera open ==========
+async function startAndCaptureTop() {
+  const overlay = document.getElementById('overlayTop');
+  const btn = document.getElementById('btnStartTop');
+  const captureBtn = document.getElementById('btnCaptureTop');
+  // Prevent double trigger
+  if (btn.disabled) return;
+  overlay.innerHTML = '<div style="font-size:28px">⏳</div><p style="color:var(--ash)">開啟相機中...</p>';
+  btn.textContent = '⏳ 開啟相機中...';
+  btn.disabled = true;
+  try {
+    await startCamera('top');
+    btn.style.display = 'none';
+    captureBtn.style.display = 'block';
+  } catch(e) {
+    overlay.innerHTML = `<div class="camera-overlay-icon">📷</div><p><strong>點此處開啟相機</strong><br>請給予相機使用權限</p><div style="margin-top:14px; background:var(--clay); color:var(--white); padding:10px 28px; border-radius:2px; font-size:15px;">開始掃描</div>`;
+  }
+}
+
+async function startAndCaptureSide() {
+  const overlay = document.getElementById('overlaySide');
+  const btn = document.getElementById('btnStartSide');
+  const captureBtn = document.getElementById('btnCaptureSide');
+  if (btn.disabled) return;
+  overlay.innerHTML = '<div style="font-size:28px">⏳</div><p style="color:var(--ash)">開啟相機中...</p>';
+  btn.textContent = '⏳ 開啟相機中...';
+  btn.disabled = true;
+  try {
+    await startCamera('side');
+    btn.style.display = 'none';
+    captureBtn.style.display = 'block';
+  } catch(e) {
+    overlay.innerHTML = `<div class="camera-overlay-icon">📷</div><p><strong>點此處開啟相機</strong><br>請給予相機使用權限</p><div style="margin-top:14px; background:var(--clay); color:var(--white); padding:10px 28px; border-radius:2px; font-size:15px;">開始掃描</div>`;
+  }
+}
+
+// ========== Auto request camera permission on load ==========
+window.addEventListener('load', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    stream.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    showToast('請允許相機存取，才能掃描作品');
+  }
+});
+
+// ========== Demo mode: Load demo data ==========
+function loadDemo() {
+  items = [
+    { id: 1, name: '茶碗', topGrids: 12, heightGrids: 8, areaSquareCm: 12*0.25, heightCm: 4, volume: 12*0.25*4 },
+    { id: 2, name: '花瓶', topGrids: 9, heightGrids: 20, areaSquareCm: 9*0.25, heightCm: 10, volume: 9*0.25*10 },
+    { id: 3, name: '盤子', topGrids: 25, heightGrids: 4, areaSquareCm: 25*0.25, heightCm: 2, volume: 25*0.25*2 },
+  ];
+  recalcVolumes();
+  renderManualTopItems();
+  updateManualSideInputs();
+  updateBar();
+  showToast('已載入示範資料');
+}
+
+
+</script>
+</body>
+</html>
