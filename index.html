@@ -964,38 +964,27 @@ function detectObjectsTop(canvas) {
   const hierarchy = new cv.Mat();
 
   try {
-    // 灰階 → 模糊 → 二值化
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
 
-    // 白底黑線：用 Otsu 自動二值化，作品會比白色背景暗
-    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    // 較強的模糊，消除細格線影響
+    cv.GaussianBlur(gray, blur, new cv.Size(15, 15), 0);
 
-    // 形態學操作：填補小洞、去除格線雜訊
-    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    // 自適應二值化，對不均勻光線更穩定
+    cv.adaptiveThreshold(blur, thresh, 255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
+
+    // 大核心的形態學操作，把格線填掉、把物件填實
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(20, 20));
     const morphed = new cv.Mat();
     cv.morphologyEx(thresh, morphed, cv.MORPH_CLOSE, kernel);
 
-    // 去除格線（細長的黑線）：水平和垂直線條去除
-    const horizontal = new cv.Mat();
-    const vertical = new cv.Mat();
-    const hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(40, 1));
-    const vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, 40));
-    cv.morphologyEx(morphed, horizontal, cv.MORPH_OPEN, hKernel);
-    cv.morphologyEx(morphed, vertical, cv.MORPH_OPEN, vKernel);
-
-    const gridLines = new cv.Mat();
-    cv.add(horizontal, vertical, gridLines);
-    const noGrid = new cv.Mat();
-    cv.subtract(morphed, gridLines, noGrid);
-
-    // 再次膨脹，確保物件輪廓完整
-    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(8, 8));
-    const final = new cv.Mat();
-    cv.dilate(noGrid, final, kernel2);
+    // 再做一次膨脹確保物件完整
+    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
+    const dilated = new cv.Mat();
+    cv.dilate(morphed, dilated, kernel2);
 
     // 找輪廓
-    cv.findContours(final, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = canvas.width * canvas.height;
     const objects = [];
@@ -1005,13 +994,13 @@ function detectObjectsTop(canvas) {
       const area = cv.contourArea(cnt);
       const rect = cv.boundingRect(cnt);
 
-      // 過濾太小（雜訊）或太大（整個畫面）的輪廓
-      if (area < imgArea * 0.005 || area > imgArea * 0.8) continue;
-      // 過濾長寬比例太極端的（可能是格線殘留）
-      const ratio = rect.width / rect.height;
-      if (ratio > 8 || ratio < 0.125) continue;
+      // 過濾：太小（雜訊）或太大（整個畫面邊框）
+      if (area < imgArea * 0.002 || area > imgArea * 0.85) { cnt.delete(); continue; }
 
-      // 換算格數（每格約佔畫面的比例，根據實際拍攝距離調整）
+      // 過濾長寬比例太極端的
+      const ratio = rect.width / rect.height;
+      if (ratio > 10 || ratio < 0.1) { cnt.delete(); continue; }
+
       const gridPx = estimateGridSize(canvas.width, canvas.height);
       const wGrids = Math.max(1, Math.round(rect.width / gridPx));
       const hGrids = Math.max(1, Math.round(rect.height / gridPx));
@@ -1028,14 +1017,9 @@ function detectObjectsTop(canvas) {
       cnt.delete();
     }
 
-    // 依大小排序
     objects.sort((a, b) => b.area_grids - a.area_grids);
 
-    // 清理
-    morphed.delete(); horizontal.delete(); vertical.delete();
-    gridLines.delete(); noGrid.delete(); final.delete(); kernel.delete(); kernel2.delete();
-    hKernel.delete(); vKernel.delete();
-
+    morphed.delete(); dilated.delete(); kernel.delete(); kernel2.delete();
     return objects;
 
   } finally {
@@ -1057,29 +1041,19 @@ function detectObjectsSide(canvas) {
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    cv.GaussianBlur(gray, blur, new cv.Size(15, 15), 0);
+    cv.adaptiveThreshold(blur, thresh, 255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
 
-    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(20, 20));
     const morphed = new cv.Mat();
     cv.morphologyEx(thresh, morphed, cv.MORPH_CLOSE, kernel);
 
-    const hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(40, 1));
-    const vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, 40));
-    const horizontal = new cv.Mat();
-    const vertical = new cv.Mat();
-    cv.morphologyEx(morphed, horizontal, cv.MORPH_OPEN, hKernel);
-    cv.morphologyEx(morphed, vertical, cv.MORPH_OPEN, vKernel);
-    const gridLines = new cv.Mat();
-    cv.add(horizontal, vertical, gridLines);
-    const noGrid = new cv.Mat();
-    cv.subtract(morphed, gridLines, noGrid);
+    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
+    const dilated = new cv.Mat();
+    cv.dilate(morphed, dilated, kernel2);
 
-    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(8, 8));
-    const final = new cv.Mat();
-    cv.dilate(noGrid, final, kernel2);
-
-    cv.findContours(final, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = canvas.width * canvas.height;
     const objects = [];
@@ -1089,9 +1063,9 @@ function detectObjectsSide(canvas) {
       const area = cv.contourArea(cnt);
       const rect = cv.boundingRect(cnt);
 
-      if (area < imgArea * 0.005 || area > imgArea * 0.8) continue;
+      if (area < imgArea * 0.002 || area > imgArea * 0.85) { cnt.delete(); continue; }
       const ratio = rect.width / rect.height;
-      if (ratio > 8 || ratio < 0.125) continue;
+      if (ratio > 10 || ratio < 0.1) { cnt.delete(); continue; }
 
       const gridPx = estimateGridSize(canvas.width, canvas.height);
       const heightGrids = Math.max(1, Math.round(rect.height / gridPx));
@@ -1106,13 +1080,9 @@ function detectObjectsSide(canvas) {
       cnt.delete();
     }
 
-    // 側視圖依 x 座標排序（由左到右）
     objects.sort((a, b) => a.bbox[0] - b.bbox[0]);
 
-    morphed.delete(); horizontal.delete(); vertical.delete();
-    gridLines.delete(); noGrid.delete(); final.delete();
-    kernel.delete(); kernel2.delete(); hKernel.delete(); vKernel.delete();
-
+    morphed.delete(); dilated.delete(); kernel.delete(); kernel2.delete();
     return objects;
 
   } finally {
@@ -1121,10 +1091,9 @@ function detectObjectsSide(canvas) {
   }
 }
 
-// 估算格線像素大小（根據畫面中偵測到的格線間距）
+// 估算格線像素大小
 function estimateGridSize(imgW, imgH) {
-  // 預設：假設隔板佔畫面約 80%，隔板寬約 20 格
-  // 可以根據實際拍攝調整這個數值
+  // 假設隔板佔畫面約 80%，隔板寬約 20 格
   return imgW * 0.8 / 20;
 }
 
