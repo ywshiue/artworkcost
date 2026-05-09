@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>窯費計算器</title>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600&family=Space+Mono:wght@400;700&display=swap');
 
@@ -1019,7 +1020,9 @@ async function captureTop() {
 
   try {
     const detections = await runYOLO(canvas);
-    const gridPx = estimateGridSize(canvas.width, canvas.height);
+    // 先用 OpenCV 偵測實際格線間距
+    cachedGridPx = detectGridSize(canvas);
+    const gridPx = cachedGridPx;
 
     const objects = detections.map((det, i) => {
       const [x1, y1, x2, y2] = det.bbox;
@@ -1065,7 +1068,8 @@ async function captureSide() {
 
   try {
     const detections = await runYOLO(canvas);
-    const gridPx = estimateGridSize(canvas.width, canvas.height);
+    cachedGridPx = cachedGridPx || detectGridSize(canvas);
+    const gridPx = cachedGridPx;
 
     const objects = detections.map((det, i) => {
       const [x1, y1, x2, y2] = det.bbox;
@@ -1091,8 +1095,78 @@ async function captureSide() {
   }
 }
 
-// 估算格線像素大小
+// ========== OpenCV 格線偵測 ==========
+let cvReady = false;
+function onOpenCvReady() { cvReady = true; }
+
+// 用 OpenCV 偵測格線間距（像素）
+function detectGridSize(canvas) {
+  // 如果 OpenCV 還沒載入，用估算值
+  if (!cvReady || !window.cv) return canvas.width * 0.8 / 20;
+
+  const cv = window.cv;
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const edges = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.Canny(gray, edges, 50, 150);
+
+    // 用 HoughLines 找水平線
+    const lines = new cv.Mat();
+    cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 50, 10);
+
+    const hSpacings = [];
+    const vSpacings = [];
+
+    // 收集水平線的 y 座標
+    const hYs = [], vXs = [];
+    for (let i = 0; i < lines.rows; i++) {
+      const x1 = lines.data32S[i * 4];
+      const y1 = lines.data32S[i * 4 + 1];
+      const x2 = lines.data32S[i * 4 + 2];
+      const y2 = lines.data32S[i * 4 + 3];
+      const angle = Math.abs(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI);
+
+      if (angle < 5) hYs.push((y1 + y2) / 2);       // 水平線
+      if (angle > 85) vXs.push((x1 + x2) / 2);      // 垂直線
+    }
+
+    lines.delete();
+
+    // 排序後計算間距
+    hYs.sort((a, b) => a - b);
+    vXs.sort((a, b) => a - b);
+
+    for (let i = 1; i < hYs.length; i++) {
+      const d = hYs[i] - hYs[i-1];
+      if (d > 5 && d < canvas.height * 0.3) hSpacings.push(d);
+    }
+    for (let i = 1; i < vXs.length; i++) {
+      const d = vXs[i] - vXs[i-1];
+      if (d > 5 && d < canvas.width * 0.3) vSpacings.push(d);
+    }
+
+    // 取中位數作為格線間距
+    const allSpacings = [...hSpacings, ...vSpacings];
+    if (allSpacings.length === 0) return canvas.width * 0.8 / 20;
+
+    allSpacings.sort((a, b) => a - b);
+    const median = allSpacings[Math.floor(allSpacings.length / 2)];
+
+    return median;
+
+  } finally {
+    src.delete(); gray.delete(); edges.delete();
+  }
+}
+
+// 快取格線大小（同一張圖不用算兩次）
+let cachedGridPx = null;
+
 function estimateGridSize(imgW, imgH) {
+  if (cachedGridPx) return cachedGridPx;
   return imgW * 0.8 / 20;
 }
 
@@ -1399,6 +1473,7 @@ function resetAll() {
   items = [];
   topDetected = false;
   sideDetected = false;
+  cachedGridPx = null;
   if (currentCam) { currentCam.getTracks().forEach(t => t.stop()); currentCam = null; }
   
   // Reset overlays
