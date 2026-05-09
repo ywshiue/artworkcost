@@ -888,14 +888,18 @@ let modelLoading = false;
 async function loadModel() {
   if (ortSession) return ortSession;
   if (modelLoading) {
-    // 等待載入完成
     while (modelLoading) await new Promise(r => setTimeout(r, 100));
     return ortSession;
   }
   modelLoading = true;
   try {
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-    ortSession = await ort.InferenceSession.create(MODEL_URL, {
+    // 先用 fetch 下載模型，再從 ArrayBuffer 載入
+    showToast('正在載入模型...');
+    const response = await fetch(MODEL_URL);
+    if (!response.ok) throw new Error(`模型下載失敗：${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+    ortSession = await ort.InferenceSession.create(arrayBuffer, {
       executionProviders: ['wasm']
     });
     showToast('✓ YOLO 模型載入完成');
