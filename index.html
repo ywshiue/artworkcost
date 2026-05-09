@@ -1020,7 +1020,7 @@ async function captureTop() {
 
   try {
     const detections = await runYOLO(canvas);
-    cachedGridPx = cachedGridPx || detectGridSize(canvas);
+    cachedGridPx = null;
     const gridPx = cachedGridPx;
 
     const objects = detections.map((det, i) => {
