@@ -1020,14 +1020,12 @@ async function captureTop() {
 
   try {
     const detections = await runYOLO(canvas);
-    // 先用 OpenCV 偵測實際格線間距
-    cachedGridPx = detectGridSize(canvas);
+    cachedGridPx = cachedGridPx || detectGridSize(canvas);
     const gridPx = cachedGridPx;
 
     const objects = detections.map((det, i) => {
       const [x1, y1, x2, y2] = det.bbox;
-      const wGrids = Math.max(1, Math.round((x2-x1) / gridPx));
-      const hGrids = Math.max(1, Math.round((y2-y1) / gridPx));
+      const { wGrids, hGrids } = countGridsInBox(canvas, x1, y1, x2, y2);
       return {
         bbox: [x1, y1, x2, y2],
         area_grids: wGrids * hGrids,
@@ -1068,16 +1066,15 @@ async function captureSide() {
 
   try {
     const detections = await runYOLO(canvas);
-    cachedGridPx = cachedGridPx || detectGridSize(canvas);
-    const gridPx = cachedGridPx;
+    cachedGridPx = cachedGridPx || null;
 
     const objects = detections.map((det, i) => {
       const [x1, y1, x2, y2] = det.bbox;
-      const heightGrids = Math.max(1, Math.round((y2-y1) / gridPx));
+      const { hGrids } = countGridsInBox(canvas, x1, y1, x2, y2);
       return {
         bbox: [x1, y1, x2, y2],
-        height_grids: heightGrids,
-        height_cm: heightGrids * 0.5,
+        height_grids: hGrids,
+        height_cm: hGrids * 0.5,
         confidence: det.confidence
       };
     }).sort((a, b) => a.bbox[0] - b.bbox[0]);
@@ -1095,79 +1092,88 @@ async function captureSide() {
   }
 }
 
-// ========== OpenCV 格線偵測 ==========
-let cvReady = false;
-function onOpenCvReady() { cvReady = true; }
-
-// 用 OpenCV 偵測格線間距（像素）
-function detectGridSize(canvas) {
-  // 如果 OpenCV 還沒載入，用估算值
-  if (!cvReady || !window.cv) return canvas.width * 0.8 / 20;
+// ========== 數框框內的格線條數 ==========
+function countGridsInBox(canvas, x1, y1, x2, y2) {
+  if (!cvReady || !window.cv) {
+    // OpenCV 未載入，用估算值
+    const gridPx = canvas.width * 0.8 / 20;
+    return {
+      wGrids: Math.max(1, Math.round((x2 - x1) / gridPx)),
+      hGrids: Math.max(1, Math.round((y2 - y1) / gridPx))
+    };
+  }
 
   const cv = window.cv;
-  const src = cv.imread(canvas);
+
+  // 裁切物件區域（稍微縮小避免邊界雜訊）
+  const margin = 4;
+  const bx1 = Math.max(0, Math.round(x1) + margin);
+  const by1 = Math.max(0, Math.round(y1) + margin);
+  const bx2 = Math.min(canvas.width, Math.round(x2) - margin);
+  const by2 = Math.min(canvas.height, Math.round(y2) - margin);
+  const bw = bx2 - bx1;
+  const bh = by2 - by1;
+
+  if (bw < 10 || bh < 10) return { wGrids: 1, hGrids: 1 };
+
+  // 從 canvas 裁切這個區域
+  const offscreen = document.createElement('canvas');
+  offscreen.width = bw;
+  offscreen.height = bh;
+  const ctx = offscreen.getContext('2d');
+  ctx.drawImage(canvas, bx1, by1, bw, bh, 0, 0, bw, bh);
+
+  const src = cv.imread(offscreen);
   const gray = new cv.Mat();
-  const edges = new cv.Mat();
+  const binary = new cv.Mat();
+  const hProj = new cv.Mat();
+  const vProj = new cv.Mat();
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.Canny(gray, edges, 50, 150);
 
-    // 用 HoughLines 找水平線
-    const lines = new cv.Mat();
-    cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 50, 10);
+    // 二值化：黑線變白色
+    cv.threshold(gray, binary, 100, 255, cv.THRESH_BINARY_INV);
 
-    const hSpacings = [];
-    const vSpacings = [];
+    // 水平投影（每行的黑色像素總和）→ 找水平格線
+    cv.reduce(binary, hProj, 1, cv.REDUCE_SUM, cv.CV_32F);
+    // 垂直投影（每列的黑色像素總和）→ 找垂直格線
+    cv.reduce(binary, vProj, 0, cv.REDUCE_SUM, cv.CV_32F);
 
-    // 收集水平線的 y 座標
-    const hYs = [], vXs = [];
-    for (let i = 0; i < lines.rows; i++) {
-      const x1 = lines.data32S[i * 4];
-      const y1 = lines.data32S[i * 4 + 1];
-      const x2 = lines.data32S[i * 4 + 2];
-      const y2 = lines.data32S[i * 4 + 3];
-      const angle = Math.abs(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI);
+    // 數水平線條數（投影值高的行 = 格線）
+    const hLines = countPeaks(hProj.data32F, bh, bw * 0.3);
+    const vLines = countPeaks(vProj.data32F, bw, bh * 0.3);
 
-      if (angle < 5) hYs.push((y1 + y2) / 2);       // 水平線
-      if (angle > 85) vXs.push((x1 + x2) / 2);      // 垂直線
-    }
+    // 格線數 + 1 = 格數
+    const wGrids = Math.max(1, vLines + 1);
+    const hGrids = Math.max(1, hLines + 1);
 
-    lines.delete();
-
-    // 排序後計算間距
-    hYs.sort((a, b) => a - b);
-    vXs.sort((a, b) => a - b);
-
-    for (let i = 1; i < hYs.length; i++) {
-      const d = hYs[i] - hYs[i-1];
-      if (d > 5 && d < canvas.height * 0.3) hSpacings.push(d);
-    }
-    for (let i = 1; i < vXs.length; i++) {
-      const d = vXs[i] - vXs[i-1];
-      if (d > 5 && d < canvas.width * 0.3) vSpacings.push(d);
-    }
-
-    // 取中位數作為格線間距
-    const allSpacings = [...hSpacings, ...vSpacings];
-    if (allSpacings.length === 0) return canvas.width * 0.8 / 20;
-
-    allSpacings.sort((a, b) => a - b);
-    const median = allSpacings[Math.floor(allSpacings.length / 2)];
-
-    return median;
+    return { wGrids, hGrids };
 
   } finally {
-    src.delete(); gray.delete(); edges.delete();
+    src.delete(); gray.delete(); binary.delete();
+    hProj.delete(); vProj.delete();
   }
 }
 
-// 快取格線大小（同一張圖不用算兩次）
-let cachedGridPx = null;
+// 數投影中的峰值（格線）數量
+function countPeaks(proj, length, threshold) {
+  let count = 0;
+  let inPeak = false;
+  for (let i = 0; i < length; i++) {
+    if (proj[i] > threshold) {
+      if (!inPeak) { count++; inPeak = true; }
+    } else {
+      inPeak = false;
+    }
+  }
+  return count;
+}
 
+// 保留舊函數相容性
+let cachedGridPx = null;
 function estimateGridSize(imgW, imgH) {
-  if (cachedGridPx) return cachedGridPx;
-  return imgW * 0.8 / 20;
+  return cachedGridPx || imgW * 0.8 / 20;
 }
 
 // ========== Draw detection results on canvas ==========
