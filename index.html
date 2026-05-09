@@ -1096,9 +1096,10 @@ async function captureSide() {
   }
 }
 
-// ========== 數框框外圍掃描線的格線條數 ==========
-// 原理：在物件框框的上下左右邊緣外取掃描線，
-// 格線沒被物件遮住，直接數黑線條數
+// ========== 數框框外圍格線條數 ==========
+// 原理：在物件框框四個方向外取掃描線，
+// 只取背景夠亮（格線之間）的行/列，
+// 取所有方向的最大值作為格數
 function countGridsInBox(canvas, x1, y1, x2, y2) {
   if (!cvReady || !window.cv) {
     const gridPx = canvas.width * 0.8 / 20;
@@ -1111,82 +1112,72 @@ function countGridsInBox(canvas, x1, y1, x2, y2) {
   const cv = window.cv;
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
-  const binary = new cv.Mat();
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.threshold(gray, binary, 100, 255, cv.THRESH_BINARY_INV);
 
     const W = canvas.width;
     const H = canvas.height;
     const ix1 = Math.round(x1), ix2 = Math.round(x2);
     const iy1 = Math.round(y1), iy2 = Math.round(y2);
+    const THRESHOLD = 140;   // 黑線像素值門檻
+    const MIN_AVG = 190;     // 掃描行平均亮度門檻（太暗代表掃到物件）
 
-    // 水平掃描：在框框上方和下方各取一行，數 x1~x2 之間的垂直黑線
-    // 多取幾行取平均，避免單行剛好落在格線上或縫隙
-    const vLineCounts = [];
-    for (let dy = 5; dy <= 20; dy += 5) {
-      const rowAbove = Math.max(0, iy1 - dy);
-      const rowBelow = Math.min(H - 1, iy2 + dy);
-      vLineCounts.push(countLineGroups(extractRow(binary, rowAbove, ix1, ix2)));
-      vLineCounts.push(countLineGroups(extractRow(binary, rowBelow, ix1, ix2)));
+    // 數一行中 xa~xb 範圍內的黑線條數
+    function countVLines(scanY) {
+      if (scanY < 0 || scanY >= H) return 0;
+      // 先檢查這行平均亮度（太暗代表掃到物件邊緣，跳過）
+      let sum = 0;
+      for (let x = ix1; x <= ix2; x++) sum += gray.ucharAt(scanY, x);
+      if (sum / (ix2 - ix1) < MIN_AVG) return 0;
+      // 數黑線
+      let count = 0, inLine = false;
+      for (let x = ix1; x <= ix2; x++) {
+        if (gray.ucharAt(scanY, x) < THRESHOLD) {
+          if (!inLine) { count++; inLine = true; }
+        } else { inLine = false; }
+      }
+      return count;
     }
-    // 取中位數
-    vLineCounts.sort((a, b) => a - b);
-    const vLines = vLineCounts[Math.floor(vLineCounts.length / 2)];
 
-    // 垂直掃描：在框框左方和右方各取一列，數 y1~y2 之間的水平黑線
-    const hLineCounts = [];
-    for (let dx = 5; dx <= 20; dx += 5) {
-      const colLeft  = Math.max(0, ix1 - dx);
-      const colRight = Math.min(W - 1, ix2 + dx);
-      hLineCounts.push(countLineGroups(extractCol(binary, colLeft,  iy1, iy2)));
-      hLineCounts.push(countLineGroups(extractCol(binary, colRight, iy1, iy2)));
+    // 數一列中 ya~yb 範圍內的黑線條數
+    function countHLines(scanX) {
+      if (scanX < 0 || scanX >= W) return 0;
+      let sum = 0;
+      for (let y = iy1; y <= iy2; y++) sum += gray.ucharAt(y, scanX);
+      if (sum / (iy2 - iy1) < MIN_AVG) return 0;
+      let count = 0, inLine = false;
+      for (let y = iy1; y <= iy2; y++) {
+        if (gray.ucharAt(y, scanX) < THRESHOLD) {
+          if (!inLine) { count++; inLine = true; }
+        } else { inLine = false; }
+      }
+      return count;
     }
-    hLineCounts.sort((a, b) => a - b);
-    const hLines = hLineCounts[Math.floor(hLineCounts.length / 2)];
 
-    // 線條數 - 1 = 格數（例如 3 條線 = 2 格）
-    const wGrids = Math.max(1, vLines - 1);
-    const hGrids = Math.max(1, hLines - 1);
+    // 上下方掃描取最大垂直線數（算寬格數）
+    let maxV = 0;
+    for (let dy = 20; dy <= 500; dy++) {
+      maxV = Math.max(maxV, countVLines(iy1 - dy));
+      maxV = Math.max(maxV, countVLines(iy2 + dy));
+    }
+
+    // 左右方掃描取最大水平線數（算高格數）
+    let maxH = 0;
+    for (let dx = 20; dx <= 500; dx++) {
+      maxH = Math.max(maxH, countHLines(ix1 - dx));
+      maxH = Math.max(maxH, countHLines(ix2 + dx));
+    }
+
+    // 線條數 - 1 = 格數
+    const wGrids = Math.max(1, maxV - 1);
+    const hGrids = Math.max(1, maxH - 1);
 
     return { wGrids, hGrids };
 
   } finally {
-    src.delete(); gray.delete(); binary.delete();
+    src.delete(); gray.delete();
   }
-}
-
-// 取出 binary 圖某一行（y 固定，x 從 x1 到 x2）的像素
-function extractRow(binary, y, x1, x2) {
-  const pixels = [];
-  for (let x = x1; x <= x2; x++) {
-    pixels.push(binary.ucharAt(y, x));
-  }
-  return pixels;
-}
-
-// 取出 binary 圖某一列（x 固定，y 從 y1 到 y2）的像素
-function extractCol(binary, x, y1, y2) {
-  const pixels = [];
-  for (let y = y1; y <= y2; y++) {
-    pixels.push(binary.ucharAt(y, x));
-  }
-  return pixels;
-}
-
-// 數像素陣列中有幾組連續白色像素群（每群 = 一條黑線）
-function countLineGroups(pixels) {
-  let count = 0;
-  let inLine = false;
-  for (const p of pixels) {
-    if (p > 128) {
-      if (!inLine) { count++; inLine = true; }
-    } else {
-      inLine = false;
-    }
-  }
-  return count;
 }
 
 let cachedGridPx = null;
