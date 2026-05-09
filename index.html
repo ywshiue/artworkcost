@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>窯費計算器</title>
-<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600&family=Space+Mono:wght@400;700&display=swap');
 
@@ -875,14 +874,30 @@ function drawGridOverlay(view) {
   svgEl.innerHTML = lines;
 }
 
-// ========== OpenCV.js 載入 ==========
-let cvReady = false;
-function onOpenCvReady() {
-  cvReady = true;
-  showToast('✓ 分析引擎載入完成');
+// ========== API 設定 ==========
+const API_BASE = 'https://artworkcost.onrender.com';
+
+// 帶 timeout 的 fetch（預設 120 秒，等待 Render 喚醒）
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-// ========== Capture & OpenCV Detection ==========
+// 頁面載入時預先喚醒 Render
+async function wakeUpServer() {
+  try {
+    await fetchWithTimeout(`${API_BASE}/health`, { method: 'GET' }, 60000);
+  } catch(e) {}
+}
+wakeUpServer();
+
+// ========== Capture & Real API Detection ==========
 async function captureTop() {
   const video = document.getElementById('videoTop');
   const canvas = document.getElementById('canvasTop');
@@ -897,20 +912,33 @@ async function captureTop() {
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('top', 'processing', '正在分析俯視圖...');
+  showStatus('top', 'processing', '正在上傳並分析俯視圖（首次可能需要 30-60 秒）...');
   document.getElementById('topLoading').classList.add('show');
   document.getElementById('btnCaptureTop').disabled = true;
 
   try {
-    await new Promise(r => setTimeout(r, 50)); // 讓 UI 更新
-    const objects = detectObjectsTop(canvas);
-    drawTopDetections(canvas, objects);
-    applyTopDetections(objects);
-    showStatus('top', 'done', `偵測到 ${objects.length} 件作品`);
-    showToast(`✓ 偵測到 ${objects.length} 件作品的底面積`);
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
+    const response = await fetchWithTimeout(`${API_BASE}/detect/top`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || '偵測失敗');
+    }
+
+    drawTopDetections(canvas, result.objects);
+    applyTopDetections(result.objects);
+    showStatus('top', 'done', `偵測到 ${result.count} 件作品`);
+    showToast(`✓ 偵測到 ${result.count} 件作品的底面積`);
+
   } catch (e) {
-    showStatus('top', '', `錯誤：${e.message}`);
-    showToast('❌ ' + e.message);
+    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
+    showStatus('top', '', `錯誤：${msg}`);
+    showToast('❌ ' + msg);
   } finally {
     document.getElementById('topLoading').classList.remove('show');
     document.getElementById('btnCaptureTop').disabled = false;
@@ -931,170 +959,37 @@ async function captureSide() {
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('side', 'processing', '正在分析側視圖...');
+  showStatus('side', 'processing', '正在上傳並分析側視圖（首次可能需要 30-60 秒）...');
   document.getElementById('sideLoading').classList.add('show');
   document.getElementById('btnCaptureSide').disabled = true;
 
   try {
-    await new Promise(r => setTimeout(r, 50));
-    const objects = detectObjectsSide(canvas);
-    drawSideDetections(canvas, objects);
-    applySideDetections(objects);
-    showStatus('side', 'done', `偵測到 ${objects.length} 件作品高度`);
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
+    const response = await fetchWithTimeout(`${API_BASE}/detect/side`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || '偵測失敗');
+    }
+
+    drawSideDetections(canvas, result.objects);
+    applySideDetections(result.objects);
+    showStatus('side', 'done', `偵測到 ${result.count} 件作品高度`);
     showToast(`✓ 偵測到作品高度資料`);
+
   } catch (e) {
-    showStatus('side', '', `錯誤：${e.message}`);
-    showToast('❌ ' + e.message);
+    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
+    showStatus('side', '', `錯誤：${msg}`);
+    showToast('❌ ' + msg);
   } finally {
     document.getElementById('sideLoading').classList.remove('show');
     document.getElementById('btnCaptureSide').disabled = false;
   }
-}
-
-// ========== OpenCV 偵測邏輯 ==========
-function detectObjectsTop(canvas) {
-  if (!cvReady) throw new Error('分析引擎尚未載入，請稍候再試');
-  const cv = window.cv;
-
-  const src = cv.imread(canvas);
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const thresh = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-    // 較強的模糊，消除細格線影響
-    cv.GaussianBlur(gray, blur, new cv.Size(15, 15), 0);
-
-    // 自適應二值化，對不均勻光線更穩定
-    cv.adaptiveThreshold(blur, thresh, 255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-
-    // 大核心的形態學操作，把格線填掉、把物件填實
-    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(20, 20));
-    const morphed = new cv.Mat();
-    cv.morphologyEx(thresh, morphed, cv.MORPH_CLOSE, kernel);
-
-    // 再做一次膨脹確保物件完整
-    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
-    const dilated = new cv.Mat();
-    cv.dilate(morphed, dilated, kernel2);
-
-    // 找輪廓
-    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    const imgArea = canvas.width * canvas.height;
-    const objects = [];
-
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const area = cv.contourArea(cnt);
-      const rect = cv.boundingRect(cnt);
-
-      // 過濾：太小（雜訊）或太大（整個畫面邊框）
-      if (area < imgArea * 0.002 || area > imgArea * 0.85) { cnt.delete(); continue; }
-
-      // 過濾長寬比例太極端的
-      const ratio = rect.width / rect.height;
-      if (ratio > 10 || ratio < 0.1) { cnt.delete(); continue; }
-
-      const gridPx = estimateGridSize(canvas.width, canvas.height);
-      const wGrids = Math.max(1, Math.round(rect.width / gridPx));
-      const hGrids = Math.max(1, Math.round(rect.height / gridPx));
-
-      objects.push({
-        bbox: [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height],
-        area_grids: wGrids * hGrids,
-        area_cm2: wGrids * hGrids * 0.25,
-        width_grids: wGrids,
-        height_grids: hGrids,
-        confidence: 1.0
-      });
-
-      cnt.delete();
-    }
-
-    objects.sort((a, b) => b.area_grids - a.area_grids);
-
-    morphed.delete(); dilated.delete(); kernel.delete(); kernel2.delete();
-    return objects;
-
-  } finally {
-    src.delete(); gray.delete(); blur.delete(); thresh.delete();
-    contours.delete(); hierarchy.delete();
-  }
-}
-
-function detectObjectsSide(canvas) {
-  if (!cvReady) throw new Error('分析引擎尚未載入，請稍候再試');
-  const cv = window.cv;
-
-  const src = cv.imread(canvas);
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const thresh = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(15, 15), 0);
-    cv.adaptiveThreshold(blur, thresh, 255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-
-    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(20, 20));
-    const morphed = new cv.Mat();
-    cv.morphologyEx(thresh, morphed, cv.MORPH_CLOSE, kernel);
-
-    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
-    const dilated = new cv.Mat();
-    cv.dilate(morphed, dilated, kernel2);
-
-    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    const imgArea = canvas.width * canvas.height;
-    const objects = [];
-
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const area = cv.contourArea(cnt);
-      const rect = cv.boundingRect(cnt);
-
-      if (area < imgArea * 0.002 || area > imgArea * 0.85) { cnt.delete(); continue; }
-      const ratio = rect.width / rect.height;
-      if (ratio > 10 || ratio < 0.1) { cnt.delete(); continue; }
-
-      const gridPx = estimateGridSize(canvas.width, canvas.height);
-      const heightGrids = Math.max(1, Math.round(rect.height / gridPx));
-
-      objects.push({
-        bbox: [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height],
-        height_grids: heightGrids,
-        height_cm: heightGrids * 0.5,
-        confidence: 1.0
-      });
-
-      cnt.delete();
-    }
-
-    objects.sort((a, b) => a.bbox[0] - b.bbox[0]);
-
-    morphed.delete(); dilated.delete(); kernel.delete(); kernel2.delete();
-    return objects;
-
-  } finally {
-    src.delete(); gray.delete(); blur.delete(); thresh.delete();
-    contours.delete(); hierarchy.delete();
-  }
-}
-
-// 估算格線像素大小
-function estimateGridSize(imgW, imgH) {
-  // 假設隔板佔畫面約 80%，隔板寬約 20 格
-  return imgW * 0.8 / 20;
 }
 
 // ========== Draw detection results on canvas ==========
