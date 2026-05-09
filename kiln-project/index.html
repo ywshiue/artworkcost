@@ -875,9 +875,27 @@ function drawGridOverlay(view) {
 }
 
 // ========== API 設定 ==========
-// 本機開發時用 http://localhost:5000
-// 部署到伺服器後改成你的伺服器網址，例如 https://your-server.railway.app
 const API_BASE = 'https://artworkcost.onrender.com';
+
+// 帶 timeout 的 fetch（預設 120 秒，等待 Render 喚醒）
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 頁面載入時預先喚醒 Render
+async function wakeUpServer() {
+  try {
+    await fetchWithTimeout(`${API_BASE}/health`, { method: 'GET' }, 60000);
+  } catch(e) {}
+}
+wakeUpServer();
 
 // ========== Capture & Real API Detection ==========
 async function captureTop() {
@@ -894,13 +912,13 @@ async function captureTop() {
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('top', 'processing', '正在上傳並分析俯視圖...');
+  showStatus('top', 'processing', '正在上傳並分析俯視圖（首次可能需要 30-60 秒）...');
   document.getElementById('topLoading').classList.add('show');
   document.getElementById('btnCaptureTop').disabled = true;
 
   try {
     const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
-    const response = await fetch(`${API_BASE}/detect/top`, {
+    const response = await fetchWithTimeout(`${API_BASE}/detect/top`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: imageBase64, grid_px: 20 })
@@ -918,8 +936,9 @@ async function captureTop() {
     showToast(`✓ 偵測到 ${result.count} 件作品的底面積`);
 
   } catch (e) {
-    showStatus('top', '', `錯誤：${e.message}`);
-    showToast('❌ ' + e.message);
+    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
+    showStatus('top', '', `錯誤：${msg}`);
+    showToast('❌ ' + msg);
   } finally {
     document.getElementById('topLoading').classList.remove('show');
     document.getElementById('btnCaptureTop').disabled = false;
@@ -940,13 +959,13 @@ async function captureSide() {
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('side', 'processing', '正在上傳並分析側視圖...');
+  showStatus('side', 'processing', '正在上傳並分析側視圖（首次可能需要 30-60 秒）...');
   document.getElementById('sideLoading').classList.add('show');
   document.getElementById('btnCaptureSide').disabled = true;
 
   try {
     const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
-    const response = await fetch(`${API_BASE}/detect/side`, {
+    const response = await fetchWithTimeout(`${API_BASE}/detect/side`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: imageBase64, grid_px: 20 })
@@ -964,8 +983,9 @@ async function captureSide() {
     showToast(`✓ 偵測到作品高度資料`);
 
   } catch (e) {
-    showStatus('side', '', `錯誤：${e.message}`);
-    showToast('❌ ' + e.message);
+    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
+    showStatus('side', '', `錯誤：${msg}`);
+    showToast('❌ ' + msg);
   } finally {
     document.getElementById('sideLoading').classList.remove('show');
     document.getElementById('btnCaptureSide').disabled = false;
