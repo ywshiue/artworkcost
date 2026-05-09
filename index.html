@@ -1092,10 +1092,11 @@ async function captureSide() {
   }
 }
 
-// ========== 數框框內的格線條數 ==========
+// ========== 數框框外圍掃描線的格線條數 ==========
+// 原理：在物件框框的上下左右邊緣外取掃描線，
+// 格線沒被物件遮住，直接數黑線條數
 function countGridsInBox(canvas, x1, y1, x2, y2) {
   if (!cvReady || !window.cv) {
-    // OpenCV 未載入，用估算值
     const gridPx = canvas.width * 0.8 / 20;
     return {
       wGrids: Math.max(1, Math.round((x2 - x1) / gridPx)),
@@ -1104,73 +1105,86 @@ function countGridsInBox(canvas, x1, y1, x2, y2) {
   }
 
   const cv = window.cv;
-
-  // 裁切物件區域（稍微縮小避免邊界雜訊）
-  const margin = 4;
-  const bx1 = Math.max(0, Math.round(x1) + margin);
-  const by1 = Math.max(0, Math.round(y1) + margin);
-  const bx2 = Math.min(canvas.width, Math.round(x2) - margin);
-  const by2 = Math.min(canvas.height, Math.round(y2) - margin);
-  const bw = bx2 - bx1;
-  const bh = by2 - by1;
-
-  if (bw < 10 || bh < 10) return { wGrids: 1, hGrids: 1 };
-
-  // 從 canvas 裁切這個區域
-  const offscreen = document.createElement('canvas');
-  offscreen.width = bw;
-  offscreen.height = bh;
-  const ctx = offscreen.getContext('2d');
-  ctx.drawImage(canvas, bx1, by1, bw, bh, 0, 0, bw, bh);
-
-  const src = cv.imread(offscreen);
+  const src = cv.imread(canvas);
   const gray = new cv.Mat();
   const binary = new cv.Mat();
-  const hProj = new cv.Mat();
-  const vProj = new cv.Mat();
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-    // 二值化：黑線變白色
     cv.threshold(gray, binary, 100, 255, cv.THRESH_BINARY_INV);
 
-    // 水平投影（每行的黑色像素總和）→ 找水平格線
-    cv.reduce(binary, hProj, 1, cv.REDUCE_SUM, cv.CV_32F);
-    // 垂直投影（每列的黑色像素總和）→ 找垂直格線
-    cv.reduce(binary, vProj, 0, cv.REDUCE_SUM, cv.CV_32F);
+    const W = canvas.width;
+    const H = canvas.height;
+    const ix1 = Math.round(x1), ix2 = Math.round(x2);
+    const iy1 = Math.round(y1), iy2 = Math.round(y2);
 
-    // 數水平線條數（投影值高的行 = 格線）
-    const hLines = countPeaks(hProj.data32F, bh, bw * 0.3);
-    const vLines = countPeaks(vProj.data32F, bw, bh * 0.3);
+    // 水平掃描：在框框上方和下方各取一行，數 x1~x2 之間的垂直黑線
+    // 多取幾行取平均，避免單行剛好落在格線上或縫隙
+    const vLineCounts = [];
+    for (let dy = 5; dy <= 20; dy += 5) {
+      const rowAbove = Math.max(0, iy1 - dy);
+      const rowBelow = Math.min(H - 1, iy2 + dy);
+      vLineCounts.push(countLineGroups(extractRow(binary, rowAbove, ix1, ix2)));
+      vLineCounts.push(countLineGroups(extractRow(binary, rowBelow, ix1, ix2)));
+    }
+    // 取中位數
+    vLineCounts.sort((a, b) => a - b);
+    const vLines = vLineCounts[Math.floor(vLineCounts.length / 2)];
 
-    // 格線數 + 1 = 格數
-    const wGrids = Math.max(1, vLines + 1);
-    const hGrids = Math.max(1, hLines + 1);
+    // 垂直掃描：在框框左方和右方各取一列，數 y1~y2 之間的水平黑線
+    const hLineCounts = [];
+    for (let dx = 5; dx <= 20; dx += 5) {
+      const colLeft  = Math.max(0, ix1 - dx);
+      const colRight = Math.min(W - 1, ix2 + dx);
+      hLineCounts.push(countLineGroups(extractCol(binary, colLeft,  iy1, iy2)));
+      hLineCounts.push(countLineGroups(extractCol(binary, colRight, iy1, iy2)));
+    }
+    hLineCounts.sort((a, b) => a - b);
+    const hLines = hLineCounts[Math.floor(hLineCounts.length / 2)];
+
+    // 線條數 - 1 = 格數（例如 3 條線 = 2 格）
+    const wGrids = Math.max(1, vLines - 1);
+    const hGrids = Math.max(1, hLines - 1);
 
     return { wGrids, hGrids };
 
   } finally {
     src.delete(); gray.delete(); binary.delete();
-    hProj.delete(); vProj.delete();
   }
 }
 
-// 數投影中的峰值（格線）數量
-function countPeaks(proj, length, threshold) {
+// 取出 binary 圖某一行（y 固定，x 從 x1 到 x2）的像素
+function extractRow(binary, y, x1, x2) {
+  const pixels = [];
+  for (let x = x1; x <= x2; x++) {
+    pixels.push(binary.ucharAt(y, x));
+  }
+  return pixels;
+}
+
+// 取出 binary 圖某一列（x 固定，y 從 y1 到 y2）的像素
+function extractCol(binary, x, y1, y2) {
+  const pixels = [];
+  for (let y = y1; y <= y2; y++) {
+    pixels.push(binary.ucharAt(y, x));
+  }
+  return pixels;
+}
+
+// 數像素陣列中有幾組連續白色像素群（每群 = 一條黑線）
+function countLineGroups(pixels) {
   let count = 0;
-  let inPeak = false;
-  for (let i = 0; i < length; i++) {
-    if (proj[i] > threshold) {
-      if (!inPeak) { count++; inPeak = true; }
+  let inLine = false;
+  for (const p of pixels) {
+    if (p > 128) {
+      if (!inLine) { count++; inLine = true; }
     } else {
-      inPeak = false;
+      inLine = false;
     }
   }
   return count;
 }
 
-// 保留舊函數相容性
 let cachedGridPx = null;
 function estimateGridSize(imgW, imgH) {
   return cachedGridPx || imgW * 0.8 / 20;
