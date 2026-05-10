@@ -5,11 +5,11 @@ import numpy as np
 import cv2
 import base64
 import os
+from collections import Counter
 
 app = Flask(__name__)
 CORS(app)
 
-# 使用 ONNX 模型，記憶體需求較小，適合免費伺服器
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'best.onnx')
 model = None
 
@@ -17,7 +17,7 @@ def get_model():
     global model
     if model is None:
         if not os.path.exists(MODEL_PATH):
-            raise FileNotFoundError(f"找不到模型檔案：{MODEL_PATH}")
+            raise FileNotFoundError(f"找不到模型：{MODEL_PATH}")
         model = YOLO(MODEL_PATH, task='detect')
     return model
 
@@ -26,8 +26,107 @@ def decode_image(base64_str):
         base64_str = base64_str.split(',')[1]
     img_bytes = base64.b64decode(base64_str)
     img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    return img
+    return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+# ========== 格線計算 ==========
+
+def get_line_positions_row(gray, y, x1, x2, threshold=100, min_gap=60):
+    """在 y 行，x1~x2 範圍內找格線位置"""
+    if y < 0 or y >= gray.shape[0]: return []
+    row = gray[y, x1:x2]
+    raw = []
+    in_line = False
+    for i, p in enumerate(row):
+        if int(p) < threshold:
+            if not in_line: raw.append(i + x1); in_line = True
+        else: in_line = False
+    clean = []
+    for p in raw:
+        if not clean or p - clean[-1] >= min_gap:
+            clean.append(p)
+    return clean
+
+def get_line_positions_col(gray, x, y1, y2, threshold=100, min_gap=60):
+    """在 x 列，y1~y2 範圍內找格線位置"""
+    if x < 0 or x >= gray.shape[1]: return []
+    col = gray[y1:y2, x]
+    raw = []
+    in_line = False
+    for i, p in enumerate(col):
+        if int(p) < threshold:
+            if not in_line: raw.append(i + y1); in_line = True
+        else: in_line = False
+    clean = []
+    for p in raw:
+        if not clean or p - clean[-1] >= min_gap:
+            clean.append(p)
+    return clean
+
+def calc_width_grids(gray, bbox, W, min_gap=80):
+    """
+    計算物件寬度格數
+    在框框上方掃描，數框框內的垂直格線數
+    """
+    x1, y1, x2, y2 = bbox
+    results = []
+    for dy in range(20, 400, 5):
+        scan_y = y1 - dy
+        if scan_y < 0: break
+        pos = get_line_positions_row(gray, scan_y, x1, W-50, min_gap=min_gap)
+        in_bbox = [x for x in pos if x1 <= x <= x2]
+        if len(in_bbox) > 0:
+            results.append(len(in_bbox))
+    if not results: return 0
+    mode = Counter(results).most_common(1)[0][0]
+    return max(0, mode - 1)
+
+def calc_depth_grids(gray, bbox, W, board_top, min_gap=80):
+    """
+    計算物件深度格數
+    在框框右側掃描，數框框內的水平格線數
+    """
+    x1, y1, x2, y2 = bbox
+    results = []
+    for dx in range(20, 400, 5):
+        scan_x = x2 + dx
+        if scan_x >= W: break
+        pos = get_line_positions_col(gray, scan_x, board_top, y2, min_gap=min_gap)
+        in_bbox = [y for y in pos if y1 <= y <= y2]
+        if len(in_bbox) > 0:
+            results.append(len(in_bbox))
+    if not results: return 0
+    mode = Counter(results).most_common(1)[0][0]
+    return max(0, mode - 1)
+
+def calc_height_grids(gray, bbox, H, min_gap=80):
+    """
+    計算物件高度格數
+    在框框左側掃描，數框框內的水平格線數
+    側視圖：物件靠右，左側是空白側視板
+    """
+    x1, y1, x2, y2 = bbox
+    results = []
+    for dx in range(20, 400, 5):
+        scan_x = x1 - dx
+        if scan_x < 0: break
+        pos = get_line_positions_col(gray, scan_x, 0, H, min_gap=min_gap)
+        in_bbox = [y for y in pos if y1 <= y <= y2]
+        if len(in_bbox) > 0:
+            results.append(len(in_bbox))
+    if not results: return 0
+    mode = Counter(results).most_common(1)[0][0]
+    return max(0, mode - 1)
+
+def find_board_top(gray):
+    """找格線板頂部 y 座標"""
+    h_proj = np.sum(gray < 100, axis=1).astype(float)
+    threshold = h_proj.max() * 0.3
+    for y in range(gray.shape[0]):
+        if h_proj[y] > threshold:
+            return y
+    return 0
+
+# ========== API ==========
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -38,28 +137,32 @@ def detect_top():
     try:
         data = request.get_json()
         img = decode_image(data['image'])
-        grid_px = float(data.get('grid_px', 20))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        H, W = gray.shape
 
         yolo = get_model()
         results = yolo(img, conf=0.3)
 
+        board_top = find_board_top(gray)
         objects = []
+
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 conf = float(box.conf[0])
+                bbox = (x1, y1, x2, y2)
 
-                w_grids = round((x2 - x1) / grid_px)
-                h_grids = round((y2 - y1) / grid_px)
-                area_grids = w_grids * h_grids
+                width_grids = calc_width_grids(gray, bbox, W)
+                depth_grids = calc_depth_grids(gray, bbox, W, board_top)
+                area_grids  = width_grids * depth_grids
 
                 objects.append({
                     'id': len(objects) + 1,
                     'bbox': [x1, y1, x2, y2],
-                    'width_grids': w_grids,
-                    'height_grids': h_grids,
+                    'width_grids': width_grids,
+                    'depth_grids': depth_grids,
                     'area_grids': area_grids,
-                    'area_cm2': area_grids * 0.25,
+                    'area_cm2': float(area_grids),
                     'confidence': round(conf, 2)
                 })
 
@@ -76,24 +179,27 @@ def detect_side():
     try:
         data = request.get_json()
         img = decode_image(data['image'])
-        grid_px = float(data.get('grid_px', 20))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        H, W = gray.shape
 
         yolo = get_model()
         results = yolo(img, conf=0.3)
 
         objects = []
+
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 conf = float(box.conf[0])
+                bbox = (x1, y1, x2, y2)
 
-                height_grids = round((y2 - y1) / grid_px)
+                height_grids = calc_height_grids(gray, bbox, H)
 
                 objects.append({
                     'id': len(objects) + 1,
                     'bbox': [x1, y1, x2, y2],
                     'height_grids': height_grids,
-                    'height_cm': height_grids * 0.5,
+                    'height_cm': float(height_grids),
                     'confidence': round(conf, 2)
                 })
 
