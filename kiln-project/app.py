@@ -35,9 +35,28 @@ def decode_image(base64_str):
     return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
 def scale_origin(origin, img_w, img_h):
-    """把固定原點從空白圖解析度縮放到當前圖片解析度"""
-    ox = int(origin['x'] * img_w / origin['w'])
-    oy = int(origin['y'] * img_h / origin['h'])
+    """
+    把固定原點從空白圖解析度縮放到當前圖片解析度
+    若拍攝方向不同（直式vs橫式），自動旋轉對齊後再縮放
+    """
+    ref_w, ref_h = origin['w'], origin['h']
+    ref_is_portrait = ref_h > ref_w
+    img_is_portrait = img_h > img_w
+
+    if ref_is_portrait == img_is_portrait:
+        # 方向相同，直接縮放
+        ox = int(origin['x'] * img_w / ref_w)
+        oy = int(origin['y'] * img_h / ref_h)
+    else:
+        # 方向不同（直式→橫式），順時針旋轉90度
+        # 新x = ref_h - 原y，新y = 原x
+        rotated_x = ref_h - origin['y']
+        rotated_y = origin['x']
+        rotated_w = ref_h
+        rotated_h = ref_w
+        ox = int(rotated_x * img_w / rotated_w)
+        oy = int(rotated_y * img_h / rotated_h)
+
     return ox, oy
 
 # ========== 格線計數 ==========
@@ -88,6 +107,7 @@ def calc_grids(gray, corner_x, corner_y, origin_x, origin_y, direction, scan_ran
 
     側視圖高度 (direction='height'):
         在 corner_x 附近掃描，從 corner_y 到 origin_y 數水平線
+        掃描 x 取框框左側（側面板空白區）
     """
     results = []
 
@@ -97,11 +117,22 @@ def calc_grids(gray, corner_x, corner_y, origin_x, origin_y, direction, scan_ran
             c = count_v_lines(gray, scan_y, origin_x, corner_x)
             if c > 0: results.append(c)
 
-    elif direction in ('depth', 'height'):
+    elif direction == 'depth':
         y_start = min(corner_y, origin_y)
         y_end   = max(corner_y, origin_y)
         for dx in range(-scan_range, scan_range, 3):
             scan_x = corner_x + dx
+            c = count_h_lines(gray, scan_x, y_start, y_end)
+            if c > 0: results.append(c)
+
+    elif direction == 'height':
+        # 掃描 x 取框框左側（side panel 空白區）
+        # 從 corner_x 往左掃，避開物件本身
+        y_start = min(corner_y, origin_y)
+        y_end   = max(corner_y, origin_y)
+        for dx in range(scan_range, scan_range * 5, 3):
+            scan_x = corner_x - dx
+            if scan_x < 0: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
             if c > 0: results.append(c)
 
