@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>窯費計算器</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600&family=Space+Mono:wght@400;700&display=swap');
 
@@ -653,7 +655,6 @@
   <div class="screen active" id="screen1">
     <div class="card">
       <div class="card-title">俯視圖掃描</div>
-      <p class="instruction">將隔板置於穩定位置，從<strong>正上方</strong>拍攝所有作品。確保格線清晰可見，格線間距為 <strong>0.5 公分</strong>。</p>
     </div>
 
     <div class="camera-wrapper" id="cameraWrapTop">
@@ -699,7 +700,6 @@
   <div class="screen" id="screen2">
     <div class="card">
       <div class="card-title">側視圖掃描</div>
-      <p class="instruction">從作品<strong>側面</strong>拍攝，確保能看到格線與作品完整高度。每件作品分別拍攝或整排掃描皆可。</p>
     </div>
 
     <div class="camera-wrapper" id="cameraWrapSide">
@@ -824,13 +824,27 @@
 
 <script>
 // ========== State ==========
-let items = []; // { id, name, topGrids, heightGrids, areaSquareCm, heightCm, volume }
+let items = [];
 let topDetected = false;
 let sideDetected = false;
 let currentCam = null;
 let manualTopCount = 0;
-const GRID_SIZE_CM = 0.5;
+const GRID_SIZE_CM = 1.0;  // 每格 1cm
 const PRICE_PER_CM3 = 0.15;
+
+// ========== API 設定 ==========
+const API_BASE = 'https://artworkcost.onrender.com';
+
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ========== Camera ==========
 async function startCamera(view) {
@@ -874,71 +888,177 @@ function drawGridOverlay(view) {
   svgEl.innerHTML = lines;
 }
 
-// ========== API 設定 ==========
-const API_BASE = 'https://artworkcost.onrender.com';
+// ========== OpenCV.js 載入 ==========
+let cvReady = false;
+function onOpenCvReady() { cvReady = true; }
 
-// 帶 timeout 的 fetch（預設 120 秒，等待 Render 喚醒）
-async function fetchWithTimeout(url, options, timeoutMs = 120000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+// ========== ONNX Runtime Web YOLO ==========
+// 你的 GitHub Pages 網址，模型從這裡載入
+const MODEL_URL = 'https://ywshiue.github.io/artworkcost/kiln-project/models/best.onnx';
+const CONF_THRESHOLD = 0.3;
+const IOU_THRESHOLD = 0.45;
+const INPUT_SIZE = 640;
+
+let ortSession = null;
+let modelLoading = false;
+
+async function loadModel() {
+  if (ortSession) return ortSession;
+  if (modelLoading) {
+    while (modelLoading) await new Promise(r => setTimeout(r, 100));
+    return ortSession;
+  }
+  modelLoading = true;
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    return response;
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+    // 先用 fetch 下載模型，再從 ArrayBuffer 載入
+    showToast('正在載入模型...');
+    const response = await fetch(MODEL_URL);
+    if (!response.ok) throw new Error(`模型下載失敗：${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+    ortSession = await ort.InferenceSession.create(arrayBuffer, {
+      executionProviders: ['wasm']
+    });
+    showToast('✓ YOLO 模型載入完成');
+    return ortSession;
   } finally {
-    clearTimeout(timer);
+    modelLoading = false;
   }
 }
 
-// 頁面載入時預先喚醒 Render
-async function wakeUpServer() {
-  try {
-    await fetchWithTimeout(`${API_BASE}/health`, { method: 'GET' }, 60000);
-  } catch(e) {}
-}
-wakeUpServer();
+// 頁面載入時預先載入模型
+loadModel().catch(() => {});
 
-// ========== Capture & Real API Detection ==========
+function preprocessImage(canvas) {
+  const offscreen = document.createElement('canvas');
+  offscreen.width = INPUT_SIZE;
+  offscreen.height = INPUT_SIZE;
+  const ctx = offscreen.getContext('2d');
+
+  // Letterbox：保持長寬比，灰色填充（跟 YOLO 訓練時一致）
+  const scale = Math.min(INPUT_SIZE / canvas.width, INPUT_SIZE / canvas.height);
+  const newW = Math.round(canvas.width * scale);
+  const newH = Math.round(canvas.height * scale);
+  const padX = Math.floor((INPUT_SIZE - newW) / 2);
+  const padY = Math.floor((INPUT_SIZE - newH) / 2);
+
+  ctx.fillStyle = 'rgb(114,114,114)';
+  ctx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
+  ctx.drawImage(canvas, padX, padY, newW, newH);
+
+  const imageData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+  const { data } = imageData;
+
+  const float32 = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
+  for (let i = 0; i < INPUT_SIZE * INPUT_SIZE; i++) {
+    float32[i] = data[i * 4] / 255;
+    float32[INPUT_SIZE * INPUT_SIZE + i] = data[i * 4 + 1] / 255;
+    float32[2 * INPUT_SIZE * INPUT_SIZE + i] = data[i * 4 + 2] / 255;
+  }
+  return { float32, scale, padX, padY };
+}
+
+function nms(boxes, scores, iouThreshold) {
+  const indices = scores.map((s, i) => i).sort((a, b) => scores[b] - scores[a]);
+  const keep = [];
+  const suppressed = new Set();
+
+  for (const i of indices) {
+    if (suppressed.has(i)) continue;
+    keep.push(i);
+    for (const j of indices) {
+      if (suppressed.has(j) || i === j) continue;
+      const iou = computeIoU(boxes[i], boxes[j]);
+      if (iou > iouThreshold) suppressed.add(j);
+    }
+  }
+  return keep;
+}
+
+function computeIoU(a, b) {
+  const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
+  const x2 = Math.min(a[2], b[2]), y2 = Math.min(a[3], b[3]);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const aArea = (a[2]-a[0]) * (a[3]-a[1]);
+  const bArea = (b[2]-b[0]) * (b[3]-b[1]);
+  return inter / (aArea + bArea - inter);
+}
+
+async function runYOLO(canvas) {
+  const session = await loadModel();
+  const { float32, scale, padX, padY } = preprocessImage(canvas);
+  const tensor = new ort.Tensor('float32', float32, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+  const feeds = { [session.inputNames[0]]: tensor };
+  const results = await session.run(feeds);
+  const output = results[session.outputNames[0]];
+  const data = output.data;
+  const numDetections = output.dims[2];
+
+  const boxes = [], scores = [];
+
+  for (let i = 0; i < numDetections; i++) {
+    const cx = data[0 * numDetections + i];
+    const cy = data[1 * numDetections + i];
+    const w  = data[2 * numDetections + i];
+    const h  = data[3 * numDetections + i];
+    const conf = data[4 * numDetections + i];
+
+    if (conf < CONF_THRESHOLD) continue;
+
+    const x1 = Math.max(0, ((cx - w/2) - padX) / scale);
+    const y1 = Math.max(0, ((cy - h/2) - padY) / scale);
+    const x2 = Math.min(canvas.width,  ((cx + w/2) - padX) / scale);
+    const y2 = Math.min(canvas.height, ((cy + h/2) - padY) / scale);
+
+    boxes.push([x1, y1, x2, y2]);
+    scores.push(conf);
+  }
+
+  const keepIdx = nms(boxes, scores, IOU_THRESHOLD);
+  return keepIdx.map(i => ({ bbox: boxes[i], confidence: scores[i] }));
+}
+
+// ========== Capture & YOLO Detection ==========
 async function captureTop() {
   const video = document.getElementById('videoTop');
   const canvas = document.getElementById('canvasTop');
 
-  if (!video.srcObject) {
-    showToast('請先開啟相機');
-    return;
-  }
+  if (!video.srcObject) { showToast('請先開啟相機'); return; }
 
   const ctx = canvas.getContext('2d');
   canvas.width = video.videoWidth || 800;
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('top', 'processing', '正在上傳並分析俯視圖（首次可能需要 30-60 秒）...');
+  showStatus('top', 'processing', '正在分析俯視圖...');
   document.getElementById('topLoading').classList.add('show');
   document.getElementById('btnCaptureTop').disabled = true;
 
   try {
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
-    const response = await fetchWithTimeout(`${API_BASE}/detect/top`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
+    const detections = await runYOLO(canvas);
+    cachedGridPx = null;
+    const gridPx = cachedGridPx;
+
+    const objects = detections.map((det, i) => {
+      const [x1, y1, x2, y2] = det.bbox;
+      const { wGrids, hGrids } = countGridsInBox(canvas, x1, y1, x2, y2);
+      return {
+        bbox: [x1, y1, x2, y2],
+        area_grids: wGrids * hGrids,
+        area_cm2: wGrids * hGrids * 0.25,
+        width_grids: wGrids,
+        height_grids: hGrids,
+        confidence: det.confidence
+      };
     });
 
-    const result = await response.json();
-
-    if (!result.success) {
-      throw new Error(result.error || '偵測失敗');
-    }
-
-    drawTopDetections(canvas, result.objects);
-    applyTopDetections(result.objects);
-    showStatus('top', 'done', `偵測到 ${result.count} 件作品`);
-    showToast(`✓ 偵測到 ${result.count} 件作品的底面積`);
-
+    drawTopDetections(canvas, objects);
+    applyTopDetections(objects);
+    showStatus('top', 'done', `偵測到 ${objects.length} 件作品`);
+    showToast(`✓ 偵測到 ${objects.length} 件作品的底面積`);
   } catch (e) {
-    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
-    showStatus('top', '', `錯誤：${msg}`);
-    showToast('❌ ' + msg);
+    showStatus('top', '', `錯誤：${e.message}`);
+    showToast('❌ ' + e.message);
   } finally {
     document.getElementById('topLoading').classList.remove('show');
     document.getElementById('btnCaptureTop').disabled = false;
@@ -949,47 +1069,132 @@ async function captureSide() {
   const video = document.getElementById('videoSide');
   const canvas = document.getElementById('canvasSide');
 
-  if (!video.srcObject) {
-    showToast('請先開啟相機');
-    return;
-  }
+  if (!video.srcObject) { showToast('請先開啟相機'); return; }
 
   const ctx = canvas.getContext('2d');
   canvas.width = video.videoWidth || 800;
   canvas.height = video.videoHeight || 600;
   ctx.drawImage(video, 0, 0);
 
-  showStatus('side', 'processing', '正在上傳並分析側視圖（首次可能需要 30-60 秒）...');
+  showStatus('side', 'processing', '正在分析側視圖...');
   document.getElementById('sideLoading').classList.add('show');
   document.getElementById('btnCaptureSide').disabled = true;
 
   try {
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
-    const response = await fetchWithTimeout(`${API_BASE}/detect/side`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imageBase64, grid_px: 20 })
-    });
+    const detections = await runYOLO(canvas);
+    cachedGridPx = cachedGridPx || null;
 
-    const result = await response.json();
+    const objects = detections.map((det, i) => {
+      const [x1, y1, x2, y2] = det.bbox;
+      const { hGrids } = countGridsInBox(canvas, x1, y1, x2, y2);
+      return {
+        bbox: [x1, y1, x2, y2],
+        height_grids: hGrids,
+        height_cm: hGrids * 0.5,
+        confidence: det.confidence
+      };
+    }).sort((a, b) => a.bbox[0] - b.bbox[0]);
 
-    if (!result.success) {
-      throw new Error(result.error || '偵測失敗');
-    }
-
-    drawSideDetections(canvas, result.objects);
-    applySideDetections(result.objects);
-    showStatus('side', 'done', `偵測到 ${result.count} 件作品高度`);
+    drawSideDetections(canvas, objects);
+    applySideDetections(objects);
+    showStatus('side', 'done', `偵測到 ${objects.length} 件作品高度`);
     showToast(`✓ 偵測到作品高度資料`);
-
   } catch (e) {
-    const msg = e.name === 'AbortError' ? '連線逾時，請再試一次' : e.message;
-    showStatus('side', '', `錯誤：${msg}`);
-    showToast('❌ ' + msg);
+    showStatus('side', '', `錯誤：${e.message}`);
+    showToast('❌ ' + e.message);
   } finally {
     document.getElementById('sideLoading').classList.remove('show');
     document.getElementById('btnCaptureSide').disabled = false;
   }
+}
+
+// ========== 數框框外圍格線條數 ==========
+// 原理：在物件框框四個方向外取掃描線，
+// 只取背景夠亮（格線之間）的行/列，
+// 取所有方向的最大值作為格數
+function countGridsInBox(canvas, x1, y1, x2, y2) {
+  if (!cvReady || !window.cv) {
+    const gridPx = canvas.width * 0.8 / 20;
+    return {
+      wGrids: Math.max(1, Math.round((x2 - x1) / gridPx)),
+      hGrids: Math.max(1, Math.round((y2 - y1) / gridPx))
+    };
+  }
+
+  const cv = window.cv;
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const ix1 = Math.round(x1), ix2 = Math.round(x2);
+    const iy1 = Math.round(y1), iy2 = Math.round(y2);
+    const THRESHOLD = 140;   // 黑線像素值門檻
+    const MIN_AVG = 190;     // 掃描行平均亮度門檻（太暗代表掃到物件）
+
+    // 數一行中 xa~xb 範圍內的黑線條數
+    function countVLines(scanY) {
+      if (scanY < 0 || scanY >= H) return 0;
+      // 先檢查這行平均亮度（太暗代表掃到物件邊緣，跳過）
+      let sum = 0;
+      for (let x = ix1; x <= ix2; x++) sum += gray.ucharAt(scanY, x);
+      if (sum / (ix2 - ix1) < MIN_AVG) return 0;
+      // 數黑線
+      let count = 0, inLine = false;
+      for (let x = ix1; x <= ix2; x++) {
+        if (gray.ucharAt(scanY, x) < THRESHOLD) {
+          if (!inLine) { count++; inLine = true; }
+        } else { inLine = false; }
+      }
+      return count;
+    }
+
+    // 數一列中 ya~yb 範圍內的黑線條數
+    function countHLines(scanX) {
+      if (scanX < 0 || scanX >= W) return 0;
+      let sum = 0;
+      for (let y = iy1; y <= iy2; y++) sum += gray.ucharAt(y, scanX);
+      if (sum / (iy2 - iy1) < MIN_AVG) return 0;
+      let count = 0, inLine = false;
+      for (let y = iy1; y <= iy2; y++) {
+        if (gray.ucharAt(y, scanX) < THRESHOLD) {
+          if (!inLine) { count++; inLine = true; }
+        } else { inLine = false; }
+      }
+      return count;
+    }
+
+    // 上下方掃描取最大垂直線數（算寬格數）
+    let maxV = 0;
+    for (let dy = 20; dy <= 500; dy++) {
+      maxV = Math.max(maxV, countVLines(iy1 - dy));
+      maxV = Math.max(maxV, countVLines(iy2 + dy));
+    }
+
+    // 左右方掃描取最大水平線數（算高格數）
+    let maxH = 0;
+    for (let dx = 20; dx <= 500; dx++) {
+      maxH = Math.max(maxH, countHLines(ix1 - dx));
+      maxH = Math.max(maxH, countHLines(ix2 + dx));
+    }
+
+    // 線條數 - 1 = 格數
+    const wGrids = Math.max(1, maxV - 1);
+    const hGrids = Math.max(1, maxH - 1);
+
+    return { wGrids, hGrids };
+
+  } finally {
+    src.delete(); gray.delete();
+  }
+}
+
+let cachedGridPx = null;
+function estimateGridSize(imgW, imgH) {
+  return cachedGridPx || imgW * 0.8 / 20;
 }
 
 // ========== Draw detection results on canvas ==========
@@ -1250,6 +1455,49 @@ function calcAndShow() {
   goToStep(4);
 }
 
+// ========== 校準 ==========
+const calibStatus = { top: false, side: false };
+
+async function uploadCalibration(view, input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById(`calib${view === 'top' ? 'Top' : 'Side'}Status`);
+  statusEl.style.color = 'var(--ember)';
+  statusEl.textContent = '⏳ 上傳中...';
+
+  try {
+    const base64 = await fileToBase64(file);
+    const response = await fetchWithTimeout(`${API_BASE}/calibrate/${view}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64 })
+    });
+    const result = await response.json();
+    if (result.success) {
+      calibStatus[view] = true;
+      statusEl.style.color = '#4caf7d';
+      statusEl.textContent = `✓ 原點已設定：(${result.origin.x}, ${result.origin.y})`;
+      showToast(`✓ ${view === 'top' ? '俯視' : '側視'}圖原點校準完成`);
+    } else {
+      statusEl.style.color = '#c44a3a';
+      statusEl.textContent = `❌ ${result.error}`;
+    }
+  } catch (e) {
+    statusEl.style.color = '#c44a3a';
+    statusEl.textContent = `❌ ${e.message}`;
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 // ========== Navigation ==========
 function goToStep(n) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -1295,22 +1543,29 @@ function resetAll() {
   items = [];
   topDetected = false;
   sideDetected = false;
+  cachedGridPx = null;
   if (currentCam) { currentCam.getTracks().forEach(t => t.stop()); currentCam = null; }
-  
-  // Reset overlays
+
   ['Top', 'Side'].forEach(v => {
-    document.getElementById(`overlay${v}`).style.display = 'flex';
-    document.getElementById(`grid${v}`).classList.remove('visible');
-    document.getElementById(`detectWrap${v}`).classList.remove('show');
+    const overlay = document.getElementById(`overlay${v}`);
+    if (overlay) overlay.style.display = 'flex';
+    const grid = document.getElementById(`grid${v}`);
+    if (grid) grid.classList.remove('visible');
+    const detectWrap = document.getElementById(`detectWrap${v}`);
+    if (detectWrap) detectWrap.classList.remove('show');
     const vid = document.getElementById(`video${v}`);
-    vid.srcObject = null;
+    if (vid) vid.srcObject = null;
     const status = document.getElementById(`${v.toLowerCase()}Status`);
     if (status) status.style.display = 'none';
+    const startBtn = document.getElementById(`btnStart${v}`);
+    if (startBtn) { startBtn.style.display = 'block'; startBtn.disabled = false; startBtn.textContent = v === 'Top' ? '📷 開始掃描俯視圖' : '📷 開始掃描側視圖'; }
+    const captureBtn = document.getElementById(`btnCapture${v}`);
+    if (captureBtn) captureBtn.style.display = 'none';
   });
 
   document.getElementById('manualTopInputs').innerHTML = '';
   updateBar();
-  goToStep(1);
+  goToStep(1);  // 校準完成後直接從步驟1開始
   showToast('已清空，開始新的一批');
 }
 
