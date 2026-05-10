@@ -1267,7 +1267,9 @@ function applyTopDetections(objects) {
     items.push({
       id: Date.now() + i,
       name: `作品 ${i + 1}`,
-      topGrids: obj.area_grids,
+      widthGrids: obj.width_grids || 0,
+      depthGrids: obj.depth_grids || 0,
+      topGrids: obj.area_grids,    // 寬格數 x 深格數
       heightGrids: 0,
       areaSquareCm: obj.area_cm2,
       heightCm: 0,
@@ -1364,6 +1366,7 @@ function updateItemHeight(idx, val) {
 
 function recalcVolumes() {
   items.forEach(item => {
+    // 每格 1cm x 1cm，topGrids = 寬格數 x 深格數 = 底面積 cm²
     item.areaSquareCm = item.topGrids * GRID_SIZE_CM * GRID_SIZE_CM;
     item.heightCm = item.heightGrids * GRID_SIZE_CM;
     item.volume = item.areaSquareCm * item.heightCm;
@@ -1385,15 +1388,27 @@ function renderItemsList() {
           style="background:none; border:none; border-bottom:1px solid rgba(196,112,58,0.2); border-radius:0; padding:2px 0; margin:0 0 4px; font-size:14px; width:100%"
           onchange="items[${i}].name=this.value">
         <div class="item-dims">
-          底: 
-          <input type="number" value="${item.topGrids}" min="0" 
-            style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
-            onchange="items[${i}].topGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
-          格 × 高:
-          <input type="number" value="${item.heightGrids}" min="0"
-            style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
-            onchange="items[${i}].heightGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
-          格 = ${item.volume.toFixed(2)} cm³
+          <div style="font-family:'Space Mono',monospace; font-size:10px; color:var(--smoke); margin-bottom:4px">
+            寬 <strong style="color:var(--clay-light)">${item.widthGrids||'?'}</strong> 格 ×
+            深 <strong style="color:var(--clay-light)">${item.depthGrids||'?'}</strong> 格 =
+            底 <strong style="color:var(--clay-light)">${item.topGrids}</strong> 格 (${item.areaSquareCm}cm²)
+          </div>
+          <div style="font-family:'Space Mono',monospace; font-size:10px; color:var(--smoke); margin-bottom:4px">
+            高 <strong style="color:var(--clay-light)">${item.heightGrids}</strong> 格 (${item.heightCm}cm)
+          </div>
+          <div style="font-family:'Space Mono',monospace; font-size:10px; color:var(--ash)">
+            體積 = ${item.areaSquareCm} × ${item.heightCm} = <strong>${item.volume.toFixed(2)}</strong> cm³
+          </div>
+          <div style="display:flex; gap:8px; margin-top:6px; align-items:center">
+            <span style="font-size:10px; color:var(--smoke)">底格數:</span>
+            <input type="number" value="${item.topGrids}" min="0" 
+              style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
+              onchange="items[${i}].topGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
+            <span style="font-size:10px; color:var(--smoke)">高格數:</span>
+            <input type="number" value="${item.heightGrids}" min="0"
+              style="width:42px; background:rgba(255,255,255,0.05); border:1px solid rgba(196,112,58,0.2); border-radius:2px; color:var(--ash); font-family:'Space Mono',monospace; font-size:11px; padding:1px 4px; text-align:center"
+              onchange="items[${i}].heightGrids=parseInt(this.value)||0; recalcVolumes(); renderItemsList(); updateBar()">
+          </div>
         </div>
       </div>
       <div class="item-vol">NT$${(item.volume * PRICE_PER_CM3).toFixed(0)}</div>
@@ -1444,7 +1459,7 @@ function calcAndShow() {
           <span style="color:var(--clay); font-family:'Space Mono',monospace; font-size:10px; margin-right:6px">#${i+1}</span>
           <span style="color:var(--ash)">${item.name}</span>
           <div style="font-family:'Space Mono',monospace; font-size:10px; color:var(--smoke); margin-top:2px">
-            底${item.topGrids}格 × 高${item.heightGrids}格 = ${item.volume.toFixed(2)}cm³
+            寬${item.widthGrids||'?'}格 × 深${item.depthGrids||'?'}格 × 高${item.heightGrids}格<br>= ${item.areaSquareCm}cm² × ${item.heightCm}cm = ${item.volume.toFixed(2)}cm³
           </div>
         </div>
         <span style="font-family:'Space Mono',monospace; color:var(--clay-light)">NT$${Math.ceil(item.volume * PRICE_PER_CM3)}</span>
