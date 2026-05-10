@@ -34,6 +34,23 @@ def decode_image(base64_str):
     img_array = np.frombuffer(img_bytes, dtype=np.uint8)
     return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
+def check_is_screenshot(img):
+    """
+    判斷是否為截圖（非相機照片）
+    iPhone 相機照片比例為 3:4 (0.75) 或 4:3 (1.33)
+    截圖比例為螢幕比例，通常是 9:19.5 ≈ 0.46 或其倒數 2.17，
+    或橫式截圖約 1.4~1.6
+    允許誤差 ±0.05
+    """
+    H, W = img.shape[:2]
+    ratio = W / H
+    # 標準相機比例
+    valid_ratios = [3/4, 4/3, 16/9, 9/16]
+    for valid in valid_ratios:
+        if abs(ratio - valid) < 0.08:
+            return False  # 正常照片
+    return True  # 可能是截圖
+
 def scale_origin(origin, img_w, img_h):
     """
     把固定原點從空白圖解析度縮放到當前圖片解析度
@@ -97,41 +114,49 @@ def stable_count(results):
 
 def calc_grids(gray, corner_x, corner_y, origin_x, origin_y, direction, scan_range=80):
     """
-    從角點到原點數格線
+    從角點到原點數格線，掃描位置只取空白區域（不穿越物件）
 
     俯視圖寬度 (direction='width'):
-        在 corner_y 附近掃描，從 origin_x 到 corner_x 數垂直線
+        掃描行 y = 框框上方空白區（corner_y 往上 scan_range px 內）
+        掃描範圍 x = origin_x 到 corner_x
+        數垂直線
 
     俯視圖深度 (direction='depth'):
-        在 corner_x 附近掃描，從 corner_y 到 origin_y 數水平線
+        掃描列 x = 框框右側空白區（corner_x 往右 scan_range px 內）
+        掃描範圍 y = corner_y 到 origin_y
+        數水平線
 
     側視圖高度 (direction='height'):
-        在 corner_x 附近掃描，從 corner_y 到 origin_y 數水平線
-        掃描 x 取框框左側（側面板空白區）
+        掃描列 x = 框框左側空白區（corner_x 往左 scan_range px 內）
+        掃描範圍 y = corner_y 到 origin_y
+        數水平線
     """
     results = []
 
     if direction == 'width':
-        for dy in range(-scan_range, scan_range, 3):
-            scan_y = corner_y + dy
+        # 在框框右上角 y 的「上方」空白格線板掃描，不穿越物件
+        for dy in range(5, scan_range, 3):
+            scan_y = corner_y - dy  # 往上
+            if scan_y < 0: break
             c = count_v_lines(gray, scan_y, origin_x, corner_x)
             if c > 0: results.append(c)
 
     elif direction == 'depth':
+        # 在框框右上角 x 的「右側」空白格線板掃描，不穿越物件
         y_start = min(corner_y, origin_y)
         y_end   = max(corner_y, origin_y)
-        for dx in range(-scan_range, scan_range, 3):
-            scan_x = corner_x + dx
+        for dx in range(5, scan_range, 3):
+            scan_x = corner_x + dx  # 往右
+            if scan_x >= gray.shape[1]: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
             if c > 0: results.append(c)
 
     elif direction == 'height':
-        # 掃描 x 取框框左側（side panel 空白區）
-        # 從 corner_x 往左掃，避開物件本身
+        # 在框框左上角 x 的「左側」空白側面板掃描，不穿越物件
         y_start = min(corner_y, origin_y)
         y_end   = max(corner_y, origin_y)
-        for dx in range(scan_range, scan_range * 5, 3):
-            scan_x = corner_x - dx
+        for dx in range(5, scan_range, 3):
+            scan_x = corner_x - dx  # 往左
             if scan_x < 0: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
             if c > 0: results.append(c)
@@ -160,6 +185,10 @@ def detect_top():
     try:
         data = request.get_json()
         img = decode_image(data['image'])
+
+        if check_is_screenshot(img):
+            return jsonify({'success': False, 'error': '請上傳相機拍攝的照片，不要使用截圖'}), 400
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
 
@@ -211,6 +240,10 @@ def detect_side():
     try:
         data = request.get_json()
         img = decode_image(data['image'])
+
+        if check_is_screenshot(img):
+            return jsonify({'success': False, 'error': '請上傳相機拍攝的照片，不要使用截圖'}), 400
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
 
