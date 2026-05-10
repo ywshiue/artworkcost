@@ -824,13 +824,27 @@
 
 <script>
 // ========== State ==========
-let items = []; // { id, name, topGrids, heightGrids, areaSquareCm, heightCm, volume }
+let items = [];
 let topDetected = false;
 let sideDetected = false;
 let currentCam = null;
 let manualTopCount = 0;
-const GRID_SIZE_CM = 0.5;
+const GRID_SIZE_CM = 1.0;  // 每格 1cm
 const PRICE_PER_CM3 = 0.15;
+
+// ========== API 設定 ==========
+const API_BASE = 'https://artworkcost.onrender.com';
+
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ========== Camera ==========
 async function startCamera(view) {
@@ -1441,6 +1455,49 @@ function calcAndShow() {
   goToStep(4);
 }
 
+// ========== 校準 ==========
+const calibStatus = { top: false, side: false };
+
+async function uploadCalibration(view, input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById(`calib${view === 'top' ? 'Top' : 'Side'}Status`);
+  statusEl.style.color = 'var(--ember)';
+  statusEl.textContent = '⏳ 上傳中...';
+
+  try {
+    const base64 = await fileToBase64(file);
+    const response = await fetchWithTimeout(`${API_BASE}/calibrate/${view}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64 })
+    });
+    const result = await response.json();
+    if (result.success) {
+      calibStatus[view] = true;
+      statusEl.style.color = '#4caf7d';
+      statusEl.textContent = `✓ 原點已設定：(${result.origin.x}, ${result.origin.y})`;
+      showToast(`✓ ${view === 'top' ? '俯視' : '側視'}圖原點校準完成`);
+    } else {
+      statusEl.style.color = '#c44a3a';
+      statusEl.textContent = `❌ ${result.error}`;
+    }
+  } catch (e) {
+    statusEl.style.color = '#c44a3a';
+    statusEl.textContent = `❌ ${e.message}`;
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 // ========== Navigation ==========
 function goToStep(n) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -1488,21 +1545,27 @@ function resetAll() {
   sideDetected = false;
   cachedGridPx = null;
   if (currentCam) { currentCam.getTracks().forEach(t => t.stop()); currentCam = null; }
-  
-  // Reset overlays
+
   ['Top', 'Side'].forEach(v => {
-    document.getElementById(`overlay${v}`).style.display = 'flex';
-    document.getElementById(`grid${v}`).classList.remove('visible');
-    document.getElementById(`detectWrap${v}`).classList.remove('show');
+    const overlay = document.getElementById(`overlay${v}`);
+    if (overlay) overlay.style.display = 'flex';
+    const grid = document.getElementById(`grid${v}`);
+    if (grid) grid.classList.remove('visible');
+    const detectWrap = document.getElementById(`detectWrap${v}`);
+    if (detectWrap) detectWrap.classList.remove('show');
     const vid = document.getElementById(`video${v}`);
-    vid.srcObject = null;
+    if (vid) vid.srcObject = null;
     const status = document.getElementById(`${v.toLowerCase()}Status`);
     if (status) status.style.display = 'none';
+    const startBtn = document.getElementById(`btnStart${v}`);
+    if (startBtn) { startBtn.style.display = 'block'; startBtn.disabled = false; startBtn.textContent = v === 'Top' ? '📷 開始掃描俯視圖' : '📷 開始掃描側視圖'; }
+    const captureBtn = document.getElementById(`btnCapture${v}`);
+    if (captureBtn) captureBtn.style.display = 'none';
   });
 
   document.getElementById('manualTopInputs').innerHTML = '';
   updateBar();
-  goToStep(1);
+  goToStep(1);  // 校準完成後直接從步驟1開始
   showToast('已清空，開始新的一批');
 }
 
