@@ -1215,17 +1215,41 @@ function drawTopDetections(sourceCanvas, objects) {
     const sx = x1 * scaleX, sy = y1 * scaleY;
     const sw = (x2 - x1) * scaleX, sh = (y2 - y1) * scaleY;
 
+    // 框框
     ctx.strokeStyle = '#e8a97a';
     ctx.lineWidth = 2;
     ctx.strokeRect(sx, sy, sw, sh);
-    ctx.fillStyle = 'rgba(196,112,58,0.15)';
+    ctx.fillStyle = 'rgba(196,112,58,0.1)';
     ctx.fillRect(sx, sy, sw, sh);
 
-    ctx.fillStyle = 'rgba(26,20,16,0.8)';
-    ctx.fillRect(sx, sy, 90, 18);
-    ctx.fillStyle = '#e8a97a';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText(`#${i+1} 底${obj.area_grids}格`, sx + 4, sy + 13);
+    // 原點（紅點）
+    if (obj.origin) {
+      const [ox, oy] = obj.origin;
+      const osx = ox * scaleX, osy = oy * scaleY;
+      ctx.fillStyle = '#ff3333';
+      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+
+      // 角點（綠點）= 框框右上角
+      const cx2 = x2 * scaleX, cy1 = y1 * scaleY;
+      ctx.fillStyle = '#00ff88';
+      ctx.beginPath(); ctx.arc(cx2, cy1, 5, 0, Math.PI*2); ctx.fill();
+
+      // 寬度掃描線（角點往左到原點，在框框上方）
+      ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(osx, cy1-8); ctx.lineTo(cx2, cy1-8); ctx.stroke();
+
+      // 深度掃描線（角點往下到原點，在框框右側）
+      ctx.strokeStyle = '#ffff00';
+      ctx.beginPath(); ctx.moveTo(cx2+8, cy1); ctx.lineTo(cx2+8, osy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // label
+    ctx.fillStyle = 'rgba(26,20,16,0.85)'; ctx.fillRect(sx, sy, 145, 32);
+    ctx.fillStyle = '#e8a97a'; ctx.font = 'bold 10px monospace';
+    ctx.fillText(`#${i+1} 寬${obj.width_grids}×深${obj.depth_grids}=${obj.area_grids}格`, sx+4, sy+12);
+    ctx.fillStyle = '#999'; ctx.font = '9px monospace';
+    ctx.fillText(`角(${x2},${y1}) 原(${obj.origin?.[0]},${obj.origin?.[1]})`, sx+4, sy+25);
   });
 }
 
@@ -1246,17 +1270,37 @@ function drawSideDetections(sourceCanvas, objects) {
     const sx = x1 * scaleX, sy = y1 * scaleY;
     const sw = (x2 - x1) * scaleX, sh = (y2 - y1) * scaleY;
 
+    // 框框
     ctx.strokeStyle = '#4caf7d';
     ctx.lineWidth = 2;
     ctx.strokeRect(sx, sy, sw, sh);
-    ctx.fillStyle = 'rgba(76,175,125,0.1)';
+    ctx.fillStyle = 'rgba(76,175,125,0.08)';
     ctx.fillRect(sx, sy, sw, sh);
 
-    ctx.fillStyle = 'rgba(26,20,16,0.8)';
-    ctx.fillRect(sx, sy, 90, 18);
-    ctx.fillStyle = '#4caf7d';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText(`#${i+1} 高${obj.height_grids}格`, sx + 4, sy + 13);
+    // 原點（紅點）
+    if (obj.origin) {
+      const [ox, oy] = obj.origin;
+      const osx = ox * scaleX, osy = oy * scaleY;
+      ctx.fillStyle = '#ff3333';
+      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+
+      // 角點（藍點）= 框框左上角
+      const cx1 = x1 * scaleX, cy1 = y1 * scaleY;
+      ctx.fillStyle = '#4488ff';
+      ctx.beginPath(); ctx.arc(cx1, cy1, 5, 0, Math.PI*2); ctx.fill();
+
+      // 高度掃描線（角點往下到原點，在框框左側）
+      ctx.strokeStyle = '#ff88ff'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(cx1-8, cy1); ctx.lineTo(cx1-8, osy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // label
+    ctx.fillStyle = 'rgba(26,20,16,0.85)'; ctx.fillRect(sx, sy, 145, 32);
+    ctx.fillStyle = '#4caf7d'; ctx.font = 'bold 10px monospace';
+    ctx.fillText(`#${i+1} 高${obj.height_grids}格`, sx+4, sy+12);
+    ctx.fillStyle = '#999'; ctx.font = '9px monospace';
+    ctx.fillText(`角(${x1},${y1}) 原(${obj.origin?.[0]},${obj.origin?.[1]})`, sx+4, sy+25);
   });
 }
 
