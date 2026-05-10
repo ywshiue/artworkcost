@@ -115,54 +115,62 @@ def stable_count(results):
 def calc_grids(gray, corner_x, corner_y, origin_x, origin_y, direction, scan_range=80):
     """
     從角點到原點數格線，掃描位置只取空白區域（不穿越物件）
-
-    俯視圖寬度 (direction='width'):
-        掃描行 y = 框框上方空白區（corner_y 往上 scan_range px 內）
-        掃描範圍 x = origin_x 到 corner_x
-        數垂直線
-
-    俯視圖深度 (direction='depth'):
-        掃描列 x = 框框右側空白區（corner_x 往右 scan_range px 內）
-        掃描範圍 y = corner_y 到 origin_y
-        數水平線
-
-    側視圖高度 (direction='height'):
-        掃描列 x = 框框左側空白區（corner_x 往左 scan_range px 內）
-        掃描範圍 y = corner_y 到 origin_y
-        數水平線
+    回傳 (格線數, debug_info)
     """
     results = []
+    debug = {
+        'direction': direction,
+        'corner': [corner_x, corner_y],
+        'origin': [origin_x, origin_y],
+        'scan_range': [],
+        'result_distribution': [],
+    }
 
     if direction == 'width':
-        # 在框框右上角 y 的「上方」空白格線板掃描，不穿越物件
+        debug['scan_x_range'] = [origin_x, corner_x]
+        debug['scan_y_samples'] = []
         for dy in range(5, scan_range, 3):
-            scan_y = corner_y - dy  # 往上
+            scan_y = corner_y - dy
             if scan_y < 0: break
             c = count_v_lines(gray, scan_y, origin_x, corner_x)
-            if c > 0: results.append(c)
+            if c > 0:
+                results.append(c)
+                if len(debug['scan_y_samples']) < 3:
+                    debug['scan_y_samples'].append({'y': scan_y, 'count': c})
 
     elif direction == 'depth':
-        # 在框框右上角 x 的「右側」空白格線板掃描，不穿越物件
         y_start = min(corner_y, origin_y)
         y_end   = max(corner_y, origin_y)
+        debug['scan_y_range'] = [y_start, y_end]
+        debug['scan_x_samples'] = []
         for dx in range(5, scan_range, 3):
-            scan_x = corner_x + dx  # 往右
+            scan_x = corner_x + dx
             if scan_x >= gray.shape[1]: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
-            if c > 0: results.append(c)
+            if c > 0:
+                results.append(c)
+                if len(debug['scan_x_samples']) < 3:
+                    debug['scan_x_samples'].append({'x': scan_x, 'count': c})
 
     elif direction == 'height':
-        # 框框左上角 y（物件頂部）往下到原點 y（側面板底部）
-        # 掃描 x 在框框左側空白側面板，不穿越物件
-        y_start = corner_y   # 框框左上角 y（物件頂部）
-        y_end   = origin_y   # 原點 y（側面板底部，較大）
+        y_start = corner_y
+        y_end   = origin_y
+        debug['scan_y_range'] = [y_start, y_end]
+        debug['scan_x_samples'] = []
         for dx in range(5, scan_range, 3):
-            scan_x = corner_x - dx  # 往左，進入側面板空白區
+            scan_x = corner_x - dx
             if scan_x < 0: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
-            if c > 0: results.append(c)
+            if c > 0:
+                results.append(c)
+                if len(debug['scan_x_samples']) < 3:
+                    debug['scan_x_samples'].append({'x': scan_x, 'count': c})
 
-    return stable_count(results)
+    from collections import Counter as C
+    if results:
+        debug['result_distribution'] = C(results).most_common(5)
+
+    return stable_count(results), debug
 
 # ========== API ==========
 
@@ -208,8 +216,8 @@ def detect_top():
                 # 框框右上角
                 corner_x, corner_y = x2, y1
 
-                width_grids = calc_grids(gray, corner_x, corner_y, ox, oy, 'width')
-                depth_grids = calc_grids(gray, corner_x, corner_y, ox, oy, 'depth')
+                width_grids, w_debug = calc_grids(gray, corner_x, corner_y, ox, oy, 'width')
+                depth_grids, d_debug = calc_grids(gray, corner_x, corner_y, ox, oy, 'depth')
                 area_grids  = width_grids * depth_grids
 
                 objects.append({
@@ -221,7 +229,8 @@ def detect_top():
                     'depth_grids': depth_grids,
                     'area_grids': area_grids,
                     'area_cm2': float(area_grids),
-                    'confidence': round(conf, 2)
+                    'confidence': round(conf, 2),
+                    'debug': {'width': w_debug, 'depth': d_debug}
                 })
 
         return jsonify({'success': True, 'objects': objects, 'count': len(objects)})
@@ -263,7 +272,7 @@ def detect_side():
                 # 框框左上角
                 corner_x, corner_y = x1, y1
 
-                height_grids = calc_grids(gray, corner_x, corner_y, ox, oy, 'height')
+                height_grids, h_debug = calc_grids(gray, corner_x, corner_y, ox, oy, 'height')
 
                 objects.append({
                     'id': len(objects) + 1,
@@ -272,7 +281,8 @@ def detect_side():
                     'origin': [ox, oy],
                     'height_grids': height_grids,
                     'height_cm': float(height_grids),
-                    'confidence': round(conf, 2)
+                    'confidence': round(conf, 2),
+                    'debug': {'height': h_debug}
                 })
 
         objects.sort(key=lambda o: o['bbox'][0])
