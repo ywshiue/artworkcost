@@ -152,11 +152,12 @@ def calc_grids(gray, corner_x, corner_y, origin_x, origin_y, direction, scan_ran
             if c > 0: results.append(c)
 
     elif direction == 'height':
-        # 在框框左上角 x 的「左側」空白側面板掃描，不穿越物件
-        y_start = min(corner_y, origin_y)
-        y_end   = max(corner_y, origin_y)
+        # 框框左上角 y（物件頂部）往下到原點 y（側面板底部）
+        # 掃描 x 在框框左側空白側面板，不穿越物件
+        y_start = corner_y   # 框框左上角 y（物件頂部）
+        y_end   = origin_y   # 原點 y（側面板底部，較大）
         for dx in range(5, scan_range, 3):
-            scan_x = corner_x - dx  # 往左
+            scan_x = corner_x - dx  # 往左，進入側面板空白區
             if scan_x < 0: break
             c = count_h_lines(gray, scan_x, y_start, y_end)
             if c > 0: results.append(c)
