@@ -1222,25 +1222,37 @@ function drawTopDetections(sourceCanvas, objects) {
     ctx.fillStyle = 'rgba(196,112,58,0.1)';
     ctx.fillRect(sx, sy, sw, sh);
 
-    // 原點（紅點）
+    // 原點（紅點）- 原點座標是針對原始圖片，需縮放到 canvas
     if (obj.origin) {
       const [ox, oy] = obj.origin;
-      const osx = ox * scaleX, osy = oy * scaleY;
-      ctx.fillStyle = '#ff3333';
-      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+      // 原點可能在 canvas 範圍外（圖片下方），clamp 到 canvas 邊界顯示
+      const osx = Math.min(ox * scaleX, 398);
+      const osy = Math.min(oy * scaleY, 298);
+      const cx2 = x2 * scaleX, cy1 = y1 * scaleY;
 
       // 角點（綠點）= 框框右上角
-      const cx2 = x2 * scaleX, cy1 = y1 * scaleY;
       ctx.fillStyle = '#00ff88';
-      ctx.beginPath(); ctx.arc(cx2, cy1, 5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx2, cy1, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#000'; ctx.font = 'bold 9px monospace';
+      ctx.fillText('角', cx2+4, cy1+4);
 
-      // 寬度掃描線（角點往左到原點，在框框上方）
-      ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
-      ctx.beginPath(); ctx.moveTo(osx, cy1-8); ctx.lineTo(cx2, cy1-8); ctx.stroke();
+      // 原點（紅點）
+      ctx.fillStyle = '#ff3333';
+      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace';
+      ctx.fillText('原', osx-4, osy+3);
 
-      // 深度掃描線（角點往下到原點，在框框右側）
+      // 寬度掃描線（青色）：從原點 x 到角點 x，在角點 y 上方
+      ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 2; ctx.setLineDash([5,3]);
+      ctx.beginPath(); ctx.moveTo(osx, cy1-10); ctx.lineTo(cx2, cy1-10); ctx.stroke();
+      ctx.fillStyle = '#00ffff'; ctx.font = '9px monospace';
+      ctx.fillText(`寬${obj.width_grids}`, osx + (cx2-osx)/2 - 10, cy1-13);
+
+      // 深度掃描線（黃色）：從角點 y 到原點 y，在角點 x 右側
       ctx.strokeStyle = '#ffff00';
-      ctx.beginPath(); ctx.moveTo(cx2+8, cy1); ctx.lineTo(cx2+8, osy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx2+10, cy1); ctx.lineTo(cx2+10, osy); ctx.stroke();
+      ctx.fillStyle = '#ffff00';
+      ctx.fillText(`深${obj.depth_grids}`, cx2+13, cy1 + (osy-cy1)/2);
       ctx.setLineDash([]);
     }
 
@@ -1277,21 +1289,30 @@ function drawSideDetections(sourceCanvas, objects) {
     ctx.fillStyle = 'rgba(76,175,125,0.08)';
     ctx.fillRect(sx, sy, sw, sh);
 
-    // 原點（紅點）
+    // 原點（紅點）- 原點座標是針對原始圖片，需縮放到 canvas
     if (obj.origin) {
       const [ox, oy] = obj.origin;
-      const osx = ox * scaleX, osy = oy * scaleY;
-      ctx.fillStyle = '#ff3333';
-      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+      const osx = Math.min(ox * scaleX, 398);
+      const osy = Math.min(oy * scaleY, 298);
+      const cx1 = x1 * scaleX, cy1 = y1 * scaleY;
 
       // 角點（藍點）= 框框左上角
-      const cx1 = x1 * scaleX, cy1 = y1 * scaleY;
       ctx.fillStyle = '#4488ff';
-      ctx.beginPath(); ctx.arc(cx1, cy1, 5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx1, cy1, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 9px monospace';
+      ctx.fillText('角', cx1+4, cy1+4);
 
-      // 高度掃描線（角點往下到原點，在框框左側）
-      ctx.strokeStyle = '#ff88ff'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
-      ctx.beginPath(); ctx.moveTo(cx1-8, cy1); ctx.lineTo(cx1-8, osy); ctx.stroke();
+      // 原點（紅點）
+      ctx.fillStyle = '#ff3333';
+      ctx.beginPath(); ctx.arc(osx, osy, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace';
+      ctx.fillText('原', osx-4, osy+3);
+
+      // 高度掃描線（粉紫色）：從角點 y 往下到原點 y，在框框左側
+      ctx.strokeStyle = '#ff88ff'; ctx.lineWidth = 2; ctx.setLineDash([5,3]);
+      ctx.beginPath(); ctx.moveTo(cx1-12, cy1); ctx.lineTo(cx1-12, osy); ctx.stroke();
+      ctx.fillStyle = '#ff88ff'; ctx.font = '9px monospace';
+      ctx.fillText(`高${obj.height_grids}`, cx1-32, cy1 + (osy-cy1)/2);
       ctx.setLineDash([]);
     }
 
