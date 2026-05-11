@@ -51,10 +51,12 @@ def check_is_screenshot(img):
             return False  # 正常照片
     return True  # 可能是截圖
 
-def scale_origin(origin, img_w, img_h):
+def scale_origin(origin, img_w, img_h, clockwise=True):
     """
     把固定原點從空白圖解析度縮放到當前圖片解析度
     若拍攝方向不同（直式vs橫式），自動旋轉對齊後再縮放
+    clockwise=True  → 順時針旋轉（俯視圖用）
+    clockwise=False → 逆時針旋轉（側視圖用）
     """
     ref_w, ref_h = origin['w'], origin['h']
     ref_is_portrait = ref_h > ref_w
@@ -65,12 +67,18 @@ def scale_origin(origin, img_w, img_h):
         ox = int(origin['x'] * img_w / ref_w)
         oy = int(origin['y'] * img_h / ref_h)
     else:
-        # 方向不同（直式→橫式），順時針旋轉90度
-        # 新x = ref_h - 原y，新y = 原x
-        rotated_x = ref_h - origin['y']
-        rotated_y = origin['x']
-        rotated_w = ref_h
-        rotated_h = ref_w
+        if clockwise:
+            # 順時針旋轉90度：新x = 原y, 新y = ref_w - 原x
+            rotated_x = origin['y']
+            rotated_y = ref_w - origin['x']
+            rotated_w = ref_h
+            rotated_h = ref_w
+        else:
+            # 逆時針旋轉90度：新x = ref_h - 原y, 新y = 原x
+            rotated_x = ref_h - origin['y']
+            rotated_y = origin['x']
+            rotated_w = ref_h
+            rotated_h = ref_w
         ox = int(rotated_x * img_w / rotated_w)
         oy = int(rotated_y * img_h / rotated_h)
 
@@ -202,7 +210,7 @@ def detect_top():
         H, W = gray.shape
 
         # 縮放原點到當前圖片尺寸
-        ox, oy = scale_origin(TOP_ORIGIN, W, H)
+        ox, oy = scale_origin(TOP_ORIGIN, W, H, clockwise=True)
 
         yolo = get_model()
         results = yolo(img, conf=0.3)
@@ -258,7 +266,7 @@ def detect_side():
         H, W = gray.shape
 
         # 縮放原點到當前圖片尺寸
-        ox, oy = scale_origin(SIDE_ORIGIN, W, H)
+        ox, oy = scale_origin(SIDE_ORIGIN, W, H, clockwise=False)
 
         yolo = get_model()
         results = yolo(img, conf=0.3)
@@ -290,6 +298,85 @@ def detect_side():
 
     except FileNotFoundError as e:
         return jsonify({'success': False, 'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/debug/top', methods=['POST'])
+def debug_top():
+    """回傳視覺化圖片，顯示原點、角點、掃描線位置"""
+    try:
+        data = request.get_json()
+        img = decode_image(data['image'])
+        H, W = img.shape[:2]
+        ox, oy = scale_origin(TOP_ORIGIN, W, H, clockwise=True)
+
+        yolo = get_model()
+        results = yolo(img, conf=0.3)
+
+        vis = img.copy()
+        # 原點
+        cv2.circle(vis, (ox, oy), 20, (0,0,255), -1)
+        cv2.putText(vis, f'Origin({ox},{oy})', (ox+5, oy-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+
+        for r in results:
+            for box in r.boxes:
+                x1,y1,x2,y2 = map(int, box.xyxy[0].tolist())
+                cv2.rectangle(vis, (x1,y1), (x2,y2), (0,165,255), 3)
+                # 角點（右上角）
+                cv2.circle(vis, (x2,y1), 15, (0,255,0), -1)
+                cv2.putText(vis, f'Corner({x2},{y1})', (x2+5,y1),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+                # 寬度掃描線（角點上方，從原點x到角點x）
+                cv2.line(vis, (ox, y1-20), (x2, y1-20), (255,255,0), 3)
+                cv2.putText(vis, 'WIDTH', (ox+(x2-ox)//2, y1-25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 2)
+                # 深度掃描線（角點右側，從角點y到原點y）
+                cv2.line(vis, (x2+20, y1), (x2+20, oy), (0,255,255), 3)
+                cv2.putText(vis, 'DEPTH', (x2+25, y1+(oy-y1)//2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
+
+        _, buf = cv2.imencode('.jpg', vis)
+        img_b64 = base64.b64encode(buf).decode('utf-8')
+        return jsonify({'success': True, 'image': f'data:image/jpeg;base64,{img_b64}',
+                        'origin': [ox, oy], 'img_size': [W, H]})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/debug/side', methods=['POST'])
+def debug_side():
+    """回傳視覺化圖片，顯示原點、角點、掃描線位置"""
+    try:
+        data = request.get_json()
+        img = decode_image(data['image'])
+        H, W = img.shape[:2]
+        ox, oy = scale_origin(SIDE_ORIGIN, W, H, clockwise=False)
+
+        yolo = get_model()
+        results = yolo(img, conf=0.3)
+
+        vis = img.copy()
+        cv2.circle(vis, (ox, oy), 20, (0,0,255), -1)
+        cv2.putText(vis, f'Origin({ox},{oy})', (ox+5, oy-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+
+        for r in results:
+            for box in r.boxes:
+                x1,y1,x2,y2 = map(int, box.xyxy[0].tolist())
+                cv2.rectangle(vis, (x1,y1), (x2,y2), (0,255,0), 3)
+                # 角點（左上角）
+                cv2.circle(vis, (x1,y1), 15, (255,0,0), -1)
+                cv2.putText(vis, f'Corner({x1},{y1})', (x1+5,y1-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
+                # 高度掃描線（角點左側，從角點y到原點y）
+                cv2.line(vis, (x1-20, y1), (x1-20, oy), (255,0,255), 3)
+                cv2.putText(vis, 'HEIGHT', (x1-70, y1+(oy-y1)//2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
+
+        _, buf = cv2.imencode('.jpg', vis)
+        img_b64 = base64.b64encode(buf).decode('utf-8')
+        return jsonify({'success': True, 'image': f'data:image/jpeg;base64,{img_b64}',
+                        'origin': [ox, oy], 'img_size': [W, H]})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
